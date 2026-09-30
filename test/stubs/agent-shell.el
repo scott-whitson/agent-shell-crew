@@ -5,6 +5,9 @@
 (require 'cl-lib)
 (defvar agent-shell-mcp-servers nil "Stub.")
 (defvar agent-shell-session-strategy 'prompt "Stub.")
+(defvar agent-shell-buffer-name-format nil "Stub: a function or nil.")
+(defvar-local agent-shell-test--created-name nil
+  "The name the stub gave this buffer; shell-maker finds its process by it.")
 (defvar-local agent-shell--state nil "Stub.")
 (defvar agent-shell-mode-hook nil "Stub.")
 (defvar agent-shell-test--calls nil "Recorded calls, newest first.")
@@ -15,7 +18,11 @@
   "Stub: record CONFIG and return a new buffer."
   (ignore session-id outgoing-request-decorator)
   (push (list 'start config default-directory) agent-shell-test--calls)
-  (let ((buffer (generate-new-buffer "stub agent shell")))
+  (let ((buffer (generate-new-buffer
+                 (if (functionp agent-shell-buffer-name-format)
+                     (funcall agent-shell-buffer-name-format (alist-get :buffer-name config) "proj")
+                   "stub agent shell"))))
+    (with-current-buffer buffer (setq agent-shell-test--created-name (buffer-name)))
     ;; Like the real one: the strategy is read INSIDE the new buffer.
     (push (list 'strategy (with-current-buffer buffer agent-shell-session-strategy))
           agent-shell-test--calls)

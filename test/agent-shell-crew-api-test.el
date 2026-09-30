@@ -51,5 +51,13 @@
     (setq-local agent-shell--state (list (cons :agent-config (list (cons :mcp-servers '(x))))))
     (should (equal (map-nested-elt agent-shell--state '(:agent-config :mcp-servers)) '(x)))))
 
+(ert-deftest crew-api-buffer-name-format-is-a-function-slot ()
+  "Crew names buffers by binding `agent-shell-buffer-name-format' to a function."
+  (should (boundp 'agent-shell-buffer-name-format))
+  (should (string-match-p "functionp agent-shell-buffer-name-format"
+                          (with-temp-buffer
+                            (insert-file-contents (find-library-name "agent-shell"))
+                            (buffer-string)))))
+
 (provide 'agent-shell-crew-api-test)
 ;;; agent-shell-crew-api-test.el ends here

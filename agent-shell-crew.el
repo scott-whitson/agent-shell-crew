@@ -92,6 +92,7 @@ the member's brief.")
   "Non-nil while `agent-shell-crew-start' is creating a session.")
 
 (defvar agent-shell-session-strategy)
+(defvar agent-shell-buffer-name-format)
 
 (defun agent-shell-crew-member-name (role root)
   "Return the member name for ROLE in the project at ROOT."
@@ -217,7 +218,9 @@ Once the session is ready, send ROLE's brief -- unless ROLE is nil, as
 for a restarted session that already has its conversation -- then any
 nudges that arrived meanwhile."
   (with-current-buffer buffer
-    (rename-buffer member t)
+    ;; Never `rename-buffer' here: shell-maker finds the session's process
+    ;; by the buffer's ORIGINAL name, so a renamed shell silently stops
+    ;; submitting.  The name comes from `--start-new-session' instead.
     (setq agent-shell-crew--member member
           agent-shell-crew--root (agent-shell-crew--normal-root root)
           agent-shell-crew--ready nil))
@@ -266,11 +269,14 @@ Interactively, read ROOT and a comma-separated list of ROLES."
 Bound from a temporary buffer: a caller in an agent-shell buffer has its
 own buffer-local `agent-shell-session-strategy', which a plain `let'
 would bind instead, leaving the new session to ask which session to
-resume."
+resume.  The buffer is named after the member when it is created."
   (with-temp-buffer
     (let ((default-directory root)
           (agent-shell-session-strategy 'new)
-          (agent-shell-crew--starting t))
+          (agent-shell-crew--starting t)
+          ;; Name the buffer exactly after the member (the config's
+          ;; :buffer-name) at creation; it must never be renamed later.
+          (agent-shell-buffer-name-format (lambda (agent-name _project) agent-name)))
       (agent-shell-start :config config))))
 
 (defun agent-shell-crew--config-identity ()

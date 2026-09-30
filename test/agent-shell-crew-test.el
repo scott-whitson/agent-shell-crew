@@ -54,6 +54,9 @@
       (should (buffer-live-p owner))
       (should (buffer-live-p check))
       (should (equal (buffer-name owner) "owner@my-app"))
+      ;; Created with that name, never renamed: shell-maker finds its
+      ;; process by the buffer's original name.
+      (should (equal (buffer-local-value 'agent-shell-test--created-name owner) "owner@my-app"))
       (should (= (length (seq-filter (lambda (c) (eq (car c) 'start)) agent-shell-test--calls)) 2))
       ;; Nothing is sent before the session says it is ready.
       (should-not (seq-find (lambda (c) (eq (car c) 'insert)) agent-shell-test--calls))
