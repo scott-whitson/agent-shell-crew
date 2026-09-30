@@ -366,5 +366,14 @@
       (should-error (agent-shell-crew-start-profile "missing") :type 'user-error)
       (should (null (seq-filter (lambda (c) (eq (car c) 'start)) agent-shell-test--calls))))))
 
+(ert-deftest crew-profile-members-union-of-profiles-sharing-a-root ()
+  (crew-main-test--with root
+    (let ((agent-shell-crew-profiles
+           `(("small" :root ,root :members ((:role "lead") (:role "owner" :name "owner-1")))
+             ("full" :root ,root :members ((:role "lead") (:role "owner" :name "owner-1")
+                                           (:role "owner" :name "owner-2"))))))
+      (should (equal (agent-shell-crew-members root)
+                     '("human" "lead@my-app" "owner-1@my-app" "owner-2@my-app"))))))
+
 (provide 'agent-shell-crew-test)
 ;;; agent-shell-crew-test.el ends here

@@ -81,13 +81,13 @@ name or the brief text, overriding the role's)."
   :type '(alist :key-type string :value-type plist)
   :group 'agent-shell-crew)
 
-(defun agent-shell-crew--profile-for-root (root)
-  "Return the profile (NAME . PLIST) whose root is ROOT, or nil."
+(defun agent-shell-crew--profiles-for-root (root)
+  "Return every profile (NAME . PLIST) whose root is ROOT."
   (let ((root (agent-shell-crew--normal-root root)))
-    (seq-find (lambda (profile)
-                (when-let* ((r (plist-get (cdr profile) :root)))
-                  (equal (agent-shell-crew--normal-root r) root)))
-              agent-shell-crew-profiles)))
+    (seq-filter (lambda (profile)
+                  (when-let* ((r (plist-get (cdr profile) :root)))
+                    (equal (agent-shell-crew--normal-root r) root)))
+                agent-shell-crew-profiles)))
 
 (defun agent-shell-crew--spec-name (spec)
   "Return the member name of profile member SPEC, without @PROJECT."
@@ -132,12 +132,15 @@ member submits input, finishes a turn, or asks for or gets permission.")
 
 (defun agent-shell-crew-members (root)
   "Return every name that may own items in ROOT's crew.
-A profiled crew's members come from its profile; any other crew's from
-`agent-shell-crew-roles'."
+A profiled crew's members come from every profile with that root -- a
+small profile is often a subset of a full one -- and any other crew's
+from `agent-shell-crew-roles'."
   (cons "human"
-        (if-let* ((profile (agent-shell-crew--profile-for-root root)))
-            (mapcar (lambda (spec) (agent-shell-crew-member-name (agent-shell-crew--spec-name spec) root))
-                    (plist-get (cdr profile) :members))
+        (if-let* ((profiles (agent-shell-crew--profiles-for-root root)))
+            (delete-dups
+             (mapcar (lambda (spec) (agent-shell-crew-member-name (agent-shell-crew--spec-name spec) root))
+                     (mapcan (lambda (profile) (copy-sequence (plist-get (cdr profile) :members)))
+                             profiles)))
           (mapcar (lambda (role) (agent-shell-crew-member-name (car role) root))
                   agent-shell-crew-roles))))
 

@@ -3,7 +3,7 @@
 **Status:** 0.1.0 built. First live run 2026-09-30 passed create → claim →
 hand-off → independent check → done, with real Claude Code sessions; it found
 four bugs the stub-based tests could not (see git log). The park → decide path
-is not yet exercised live. Profiles (below) are designed, not yet built.
+is not yet exercised live. Profiles (below) are built, not yet run live.
 **Date:** 2026-09-30
 
 A small crew of [agent-shell](https://github.com/xenodium/agent-shell) sessions
@@ -221,8 +221,9 @@ see each other.
   carry project-specific instructions without the package knowing the project.
   A role not in `agent-shell-crew-roles` is allowed when the member has its own
   `:brief` (the example's `gate`).
-- **Membership** of a profiled crew is its members plus `human`; hand-offs and
-  new items may target any of them.
+- **Membership** of a profiled crew is `human` plus the members of every
+  profile with that root (a one-lane dry-run profile is usually a subset of
+  the full one); hand-offs and new items may target any of them.
 
 **`agent-shell-crew-start-profile`** starts every member of a profile that is
 not already running. `agent-shell-crew-start` is unchanged: a crew without a
