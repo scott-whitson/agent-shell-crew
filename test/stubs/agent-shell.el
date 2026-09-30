@@ -15,7 +15,11 @@
   "Stub: record CONFIG and return a new buffer."
   (ignore session-id outgoing-request-decorator)
   (push (list 'start config default-directory) agent-shell-test--calls)
-  (generate-new-buffer "stub agent shell"))
+  (let ((buffer (generate-new-buffer "stub agent shell")))
+    ;; Like the real one: the strategy is read INSIDE the new buffer.
+    (push (list 'strategy (with-current-buffer buffer agent-shell-session-strategy))
+          agent-shell-test--calls)
+    buffer))
 (cl-defun agent-shell-insert (&key text submit no-focus shell-buffer)
   "Stub: record the insertion."
   (push (list 'insert text submit no-focus shell-buffer) agent-shell-test--calls))

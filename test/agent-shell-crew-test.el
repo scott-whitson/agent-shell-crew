@@ -58,8 +58,8 @@
       ;; Nothing is sent before the session says it is ready.
       (should-not (seq-find (lambda (c) (eq (car c) 'insert)) agent-shell-test--calls))
       (cl-letf (((symbol-function 'agent-shell-crew--input-empty-p) (lambda (_b) t)))
-        (agent-shell-test--emit owner 'prompt-ready)
-        (agent-shell-test--emit owner 'prompt-ready))
+        (agent-shell-test--emit owner 'init-finished)
+        (agent-shell-test--emit owner 'init-finished))
       (let ((inserts (seq-filter (lambda (c) (eq (car c) 'insert)) agent-shell-test--calls)))
         (should (= (length inserts) 1))
         (should (string-match-p "You are owner@my-app" (nth 1 (car inserts))))
@@ -179,13 +179,10 @@
 (ert-deftest crew-start-asks-for-a-new-session ()
   "Finding 3: every role gets a NEW session, never a picker or a resume."
   (crew-main-test--with root
-    (let (seen)
-      (cl-letf* ((real (symbol-function 'agent-shell-start))
-                 ((symbol-function 'agent-shell-start)
-                  (lambda (&rest args) (push agent-shell-session-strategy seen) (apply real args))))
-        (let ((agent-shell-session-strategy 'prompt))
-          (agent-shell-crew-start root '("owner" "check"))))
-      (should (equal seen '(new new))))))
+    (let ((agent-shell-session-strategy 'prompt))
+      (agent-shell-crew-start root '("owner" "check")))
+    (should (equal (mapcar #'cadr (seq-filter (lambda (c) (eq (car c) 'strategy)) agent-shell-test--calls))
+                   '(new new)))))
 
 (ert-deftest crew-nudge-before-ready-waits-for-intro ()
   "Finding 4: nudges sent during bootstrap arrive after the intro, none lost."
@@ -196,7 +193,7 @@
       (agent-shell-crew--notify "owner@my-app" root "second nudge")
       (should-not (seq-find (lambda (c) (eq (car c) 'insert)) agent-shell-test--calls))
       (cl-letf (((symbol-function 'agent-shell-crew--input-empty-p) (lambda (_b) t)))
-        (agent-shell-test--emit owner 'prompt-ready))
+        (agent-shell-test--emit owner 'init-finished))
       (let ((texts (mapcar (lambda (c) (nth 1 c))
                            (reverse (seq-filter (lambda (c) (eq (car c) 'insert)) agent-shell-test--calls)))))
         (should (= (length texts) 3))
@@ -210,7 +207,7 @@
     (let ((owner (agent-shell-crew--member-buffer "owner@my-app" root))
           (id (agent-shell-crew-queue-create root "human" :title "Late" :owner "owner@my-app")))
       (cl-letf (((symbol-function 'agent-shell-crew--input-empty-p) (lambda (_b) t)))
-        (agent-shell-test--emit owner 'prompt-ready))
+        (agent-shell-test--emit owner 'init-finished))
       (should (seq-find (lambda (c) (and (eq (car c) 'insert) (string-match-p (regexp-quote id) (nth 1 c))))
                         agent-shell-test--calls)))))
 
@@ -251,6 +248,36 @@
       (should (= (length (seq-filter (lambda (c) (eq (car c) 'start)) agent-shell-test--calls)) 2))
       (should-not (eq (agent-shell-crew--member-buffer "owner@app" a)
                       (agent-shell-crew--member-buffer "owner@app" b))))))
+
+;;; Live-run findings (2026-09-30).
+
+(ert-deftest crew-start-from-an-agent-shell-buffer-still-new ()
+  "A: a buffer-local strategy in the calling buffer must not leak in."
+  (crew-main-test--with root
+    (with-temp-buffer
+      (setq-local agent-shell-session-strategy 'prompt)
+      (agent-shell-crew-start root '("owner")))
+    (should (equal (mapcar #'cadr (seq-filter (lambda (c) (eq (car c) 'strategy)) agent-shell-test--calls))
+                   '(new)))))
+
+(ert-deftest crew-brief-waits-for-init-finished ()
+  "B: prompt-ready comes before the session mode is set; the brief must wait."
+  (crew-main-test--with root
+    (agent-shell-crew-start root '("owner"))
+    (let ((owner (agent-shell-crew--member-buffer "owner@my-app" root)))
+      (cl-letf (((symbol-function 'agent-shell-crew--input-empty-p) (lambda (_b) t)))
+        (agent-shell-test--emit owner 'prompt-ready)
+        (should-not (seq-find (lambda (c) (eq (car c) 'insert)) agent-shell-test--calls))
+        (agent-shell-test--emit owner 'init-finished))
+      (should (seq-find (lambda (c) (eq (car c) 'insert)) agent-shell-test--calls)))))
+
+(ert-deftest crew-owner-candidates-running-first ()
+  "C: members with a running session are offered first."
+  (crew-main-test--with root
+    (agent-shell-crew-start root '("check"))
+    (should (equal (car (agent-shell-crew--owner-candidates root)) "check@my-app"))
+    (should (member "lead@my-app" (agent-shell-crew--owner-candidates root)))
+    (should-not (member "human" (agent-shell-crew--owner-candidates root)))))
 
 (provide 'agent-shell-crew-test)
 ;;; agent-shell-crew-test.el ends here

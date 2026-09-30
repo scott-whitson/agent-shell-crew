@@ -223,7 +223,10 @@ nudges that arrived meanwhile."
           agent-shell-crew--ready nil))
   (let ((sent nil))
     (agent-shell-subscribe-to
-     :shell-buffer buffer :event 'prompt-ready
+     ;; Not `prompt-ready': agent-shell emits that BEFORE it sets the model,
+     ;; session mode and config options, and a prompt submitted in between
+     ;; is lost while the shell stays busy.  `init-finished' ends startup.
+     :shell-buffer buffer :event 'init-finished
      :on-event (lambda (_event)
                  (unless sent
                    (setq sent t)
@@ -254,13 +257,21 @@ Interactively, read ROOT and a comma-separated list of ROLES."
       (let ((member (agent-shell-crew-member-name role root)))
         (if (agent-shell-crew--member-buffer member root)
             (message "%s is already running" member)
-          (let* ((default-directory root)
-                 ;; A crew member is always a NEW session: agent-shell's
-                 ;; default strategy would ask which session to resume.
-                 (agent-shell-session-strategy 'new)
-                 (agent-shell-crew--starting t)
-                 (buffer (agent-shell-start :config (agent-shell-crew--session-config role root socket))))
-            (agent-shell-crew--adopt buffer member role root)))))))
+          (let ((config (agent-shell-crew--session-config role root socket)))
+            (agent-shell-crew--adopt (agent-shell-crew--start-new-session root config)
+                                     member role root)))))))
+
+(defun agent-shell-crew--start-new-session (root config)
+  "Start a NEW agent-shell session with CONFIG in ROOT and return its buffer.
+Bound from a temporary buffer: a caller in an agent-shell buffer has its
+own buffer-local `agent-shell-session-strategy', which a plain `let'
+would bind instead, leaving the new session to ask which session to
+resume."
+  (with-temp-buffer
+    (let ((default-directory root)
+          (agent-shell-session-strategy 'new)
+          (agent-shell-crew--starting t))
+      (agent-shell-start :config config))))
 
 (defun agent-shell-crew--config-identity ()
   "Return (MEMBER . ROOT) from this buffer's crew MCP server, or nil."
@@ -291,6 +302,14 @@ never a second owner."
 
 (add-hook 'agent-shell-mode-hook #'agent-shell-crew--maybe-adopt)
 
+(defun agent-shell-crew--owner-candidates (root)
+  "Return the members of ROOT's crew who can own an item, running ones first.
+The first is the default, so pressing RET never picks a member with no
+session."
+  (let* ((members (remove "human" (agent-shell-crew-members root)))
+         (running (seq-filter (lambda (m) (agent-shell-crew--member-buffer m root)) members)))
+    (append running (seq-difference members running))))
+
 (defun agent-shell-crew--options (question)
   "Return the numbered options written inline in QUESTION.
 Options look like \"(1) first; (2) second\"."
@@ -309,7 +328,9 @@ Returns the new item's id."
   (interactive
    (let* ((root (file-name-as-directory
                  (expand-file-name (read-directory-name "Project: " (agent-shell-crew--default-root)))))
-          (owner (completing-read "For: " (remove "human" (agent-shell-crew-members root)) nil t))
+          (candidates (agent-shell-crew--owner-candidates root))
+          (owner (completing-read (format "For (default %s): " (car candidates))
+                                  candidates nil t nil nil (car candidates)))
           (title (read-string "Title: "))
           (brief (read-string "Brief: "))
           (evidence (read-string "Evidence file (optional): ")))

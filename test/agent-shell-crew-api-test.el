@@ -17,7 +17,7 @@
 
 (ert-deftest crew-api-events-documented ()
   (let ((doc (documentation 'agent-shell-subscribe-to)))
-    (dolist (event '("prompt-ready" "input-submitted" "turn-complete"))
+    (dolist (event '("init-finished" "input-submitted" "turn-complete"))
       (should (string-match-p event doc)))))
 
 (ert-deftest crew-api-insert-keywords ()
