@@ -375,5 +375,30 @@
       (should (equal (agent-shell-crew-members root)
                      '("human" "lead@my-app" "owner-1@my-app" "owner-2@my-app"))))))
 
+(ert-deftest crew-start-briefless-role-still-introduced ()
+  (crew-main-test--with root
+    (let ((agent-shell-crew-roles
+           '(("review" :config-maker agent-shell-anthropic-make-claude-code-config))))
+      (let ((buffer (car (agent-shell-crew-start root '("review")))))
+        (cl-letf (((symbol-function 'agent-shell-crew--input-empty-p) (lambda (_b) t)))
+          (agent-shell-test--emit buffer 'init-finished))
+        (should (seq-find (lambda (c) (and (eq (car c) 'insert) (eq (nth 4 c) buffer)
+                                           (string-match-p "You are review@my-app" (nth 1 c))))
+                          agent-shell-test--calls))))))
+
+(ert-deftest crew-start-profile-refuses-bad-briefs-and-names ()
+  (crew-main-test--with root
+    (let ((agent-shell-crew-roles
+           (cons '("review" :config-maker agent-shell-anthropic-make-claude-code-config)
+                 agent-shell-crew-roles))
+          (agent-shell-crew-profiles
+           `(("briefless" :root ,root :members ((:role "review")))
+             ("typo-home" :root ,root :members ((:role "gate" :brief "~/no-such-crew-brief-4c1e.md")))
+             ("typo-abs" :root ,root :members ((:role "gate" :brief "/no/such/crew-brief.md")))
+             ("twins" :root ,root :members ((:role "owner") (:role "owner"))))))
+      (dolist (name '("briefless" "typo-home" "typo-abs" "twins"))
+        (should-error (agent-shell-crew-start-profile name) :type 'user-error))
+      (should (null (seq-filter (lambda (c) (eq (car c) 'start)) agent-shell-test--calls))))))
+
 (provide 'agent-shell-crew-test)
 ;;; agent-shell-crew-test.el ends here

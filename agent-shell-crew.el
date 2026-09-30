@@ -181,10 +181,9 @@ NAME, when non-nil, is the member's name instead of ROLE."
 
 (defun agent-shell-crew--brief (role &optional override)
   "Return the brief text for ROLE, or OVERRIDE when non-nil.
-Either may be an absolute file name or the text itself."
-  (let ((brief (or override (plist-get (agent-shell-crew--role role) :brief))))
-    (unless brief
-      (user-error "Crew role %s has no brief; give the member a :brief" role))
+Either may be an absolute file name or the text itself; no brief at
+all is the empty string."
+  (let ((brief (or override (plist-get (agent-shell-crew--role role) :brief) "")))
     (let ((file (and (file-name-absolute-p brief) (expand-file-name brief))))
       (if (and file (file-readable-p file))
           (with-temp-buffer (insert-file-contents file) (string-trim (buffer-string)))
@@ -327,7 +326,8 @@ Interactively, read ROOT and a comma-separated list of ROLES."
 (defun agent-shell-crew-start-profile (name)
   "Start every member of crew profile NAME that is not already running.
 See `agent-shell-crew-profiles'.  The whole profile is checked first:
-a missing directory or a role with no brief starts nothing."
+a missing directory, a missing or unreadable brief, or a member name
+used twice starts nothing."
   (interactive
    (list (completing-read "Crew profile: " (mapcar #'car agent-shell-crew-profiles) nil t)))
   (let* ((profile (or (assoc name agent-shell-crew-profiles)
@@ -336,13 +336,23 @@ a missing directory or a role with no brief starts nothing."
                 (or (plist-get (cdr profile) :root)
                     (user-error "Crew profile %s has no :root" name))))
          (specs (plist-get (cdr profile) :members)))
-    (dolist (spec specs)
-      (let ((dir (plist-get spec :directory)))
-        (when (and dir (not (file-directory-p dir)))
-          (user-error "Crew member %s: no directory %s" (agent-shell-crew--spec-name spec) dir)))
-      (unless (or (plist-get spec :brief) (agent-shell-crew--role (plist-get spec :role)))
-        (user-error "Crew member %s: role %s has no brief"
-                    (agent-shell-crew--spec-name spec) (plist-get spec :role))))
+    (let ((seen nil))
+      (dolist (spec specs)
+        (let ((member (agent-shell-crew--spec-name spec))
+              (dir (plist-get spec :directory))
+              (brief (or (plist-get spec :brief)
+                         (plist-get (agent-shell-crew--role (plist-get spec :role)) :brief))))
+          (when (member member seen)
+            (user-error "Crew profile %s names %s twice; give each a :name" name member))
+          (push member seen)
+          (when (and dir (not (file-directory-p dir)))
+            (user-error "Crew member %s: no directory %s" member dir))
+          (unless brief
+            (user-error "Crew member %s: role %s has no brief" member (plist-get spec :role)))
+          ;; A brief that looks like a file name but cannot be read would
+          ;; otherwise be sent as the brief text itself.
+          (when (and (file-name-absolute-p brief) (not (file-readable-p brief)))
+            (user-error "Crew member %s: cannot read brief file %s" member brief)))))
     (let ((socket (agent-shell-crew--server-socket)))
       (delq nil (mapcar (lambda (spec)
                           (agent-shell-crew--start-member
