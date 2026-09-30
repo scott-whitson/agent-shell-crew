@@ -3,7 +3,7 @@
 **Status:** 0.1.0 built. First live run 2026-09-30 passed create → claim →
 hand-off → independent check → done, with real Claude Code sessions; it found
 four bugs the stub-based tests could not (see git log). The park → decide path
-is not yet exercised live.
+is not yet exercised live. Profiles (below) are designed, not yet built.
 **Date:** 2026-09-30
 
 A small crew of [agent-shell](https://github.com/xenodium/agent-shell) sessions
@@ -190,6 +190,47 @@ one line: *"New crew item c-… for you: TITLE. Call crew_show."*
   the draft with it.
 - **No such session:** the item waits `PENDING`; `agent-shell-crew-start` tells
   each member what it already owns when it starts.
+
+## Profiles: one crew across several worktrees
+
+*Added 2026-09-30, for running parallel lanes on one project.*
+
+A crew is one project root and one queue, but its members need not share a
+working directory. The motivating case: three lanes, each an owner and a
+checker in its own git worktree, plus a lead and a gate, all coordinating
+through one queue. Three separate crews would mean three queues that cannot
+see each other.
+
+**A profile** is a named list of member specs:
+
+```elisp
+(setq agent-shell-crew-profiles
+      '(("my-app"
+         :root "~/src/my-app/"
+         :members ((:role "lead"  :directory "~/src/my-app-lead/")
+                   (:role "owner" :name "owner-1" :directory "~/src/my-app-lane-1/")
+                   (:role "check" :name "check-1" :directory "~/src/my-app-lane-1/")
+                   (:role "gate"  :directory "~/src/my-app-gate/" :brief "~/briefs/gate.md")))))
+```
+
+- `:root` is the crew's project root: it names the queue file and the
+  `@PROJECT` part of every member name. Members' sessions run in their own
+  `:directory`, but act on this one queue (`CREW_PROJECT` is the root).
+- `:name` defaults to `:role`, so a lane member is `owner-1@my-app`.
+- `:brief` overrides the role's brief for this member only, so a profile can
+  carry project-specific instructions without the package knowing the project.
+  A role not in `agent-shell-crew-roles` is allowed when the member has its own
+  `:brief` (the example's `gate`).
+- **Membership** of a profiled crew is its members plus `human`; hand-offs and
+  new items may target any of them.
+
+**`agent-shell-crew-start-profile`** starts every member of a profile that is
+not already running. `agent-shell-crew-start` is unchanged: a crew without a
+profile behaves exactly as before, every member in the root.
+
+The package still does not manage git. Creating the worktrees, and anything
+that should be true of them (database ports, local permission rules), is the
+user's own setup.
 
 ## Human commands
 
