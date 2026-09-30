@@ -31,6 +31,7 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'map)
 (require 'project)
 (require 'seq)
@@ -70,6 +71,28 @@ agent-shell config (see `agent-shell-make-agent-config')."
   :type 'string
   :group 'agent-shell-crew)
 
+(defcustom agent-shell-crew-profiles nil
+  "Named crews whose members work in their own directories.
+Each element is (NAME . PLIST).  PLIST has :root, the crew's project
+root (it names the queue and the @PROJECT of every member), and
+:members, a list of member plists: :role, and optionally :name
+\(default: the role), :directory (default: the root) and :brief (a file
+name or the brief text, overriding the role's)."
+  :type '(alist :key-type string :value-type plist)
+  :group 'agent-shell-crew)
+
+(defun agent-shell-crew--profile-for-root (root)
+  "Return the profile (NAME . PLIST) whose root is ROOT, or nil."
+  (let ((root (agent-shell-crew--normal-root root)))
+    (seq-find (lambda (profile)
+                (when-let* ((r (plist-get (cdr profile) :root)))
+                  (equal (agent-shell-crew--normal-root r) root)))
+              agent-shell-crew-profiles)))
+
+(defun agent-shell-crew--spec-name (spec)
+  "Return the member name of profile member SPEC, without @PROJECT."
+  (or (plist-get spec :name) (plist-get spec :role)))
+
 (defvar-local agent-shell-crew--member nil
   "The crew member name of this agent-shell buffer, or nil.")
 (put 'agent-shell-crew--member 'permanent-local t)
@@ -103,10 +126,20 @@ member submits input, finishes a turn, or asks for or gets permission.")
   "Return the member name for ROLE in the project at ROOT."
   (format "%s@%s" role (agent-shell-crew-project-name root)))
 
+(defun agent-shell-crew--normal-root (root)
+  "Return ROOT as an absolute directory name."
+  (file-name-as-directory (expand-file-name root)))
+
 (defun agent-shell-crew-members (root)
-  "Return every name that may own items in ROOT's crew."
-  (cons "human" (mapcar (lambda (role) (agent-shell-crew-member-name (car role) root))
-                        agent-shell-crew-roles)))
+  "Return every name that may own items in ROOT's crew.
+A profiled crew's members come from its profile; any other crew's from
+`agent-shell-crew-roles'."
+  (cons "human"
+        (if-let* ((profile (agent-shell-crew--profile-for-root root)))
+            (mapcar (lambda (spec) (agent-shell-crew-member-name (agent-shell-crew--spec-name spec) root))
+                    (plist-get (cdr profile) :members))
+          (mapcar (lambda (role) (agent-shell-crew-member-name (car role) root))
+                  agent-shell-crew-roles))))
 
 (defun agent-shell-crew--server-socket ()
   "Return the Emacs server socket, starting the server when needed."
@@ -125,15 +158,15 @@ member submits input, finishes a turn, or asks for or gets permission.")
             ((name . "CREW_EMACS_SOCKET") (value . ,socket))))))
 
 (defun agent-shell-crew--role (role)
-  "Return ROLE's plist, or fail."
-  (or (cdr (assoc role agent-shell-crew-roles))
-      (user-error "Unknown crew role: %s" role)))
+  "Return ROLE's plist from `agent-shell-crew-roles', or nil."
+  (cdr (assoc role agent-shell-crew-roles)))
 
-(defun agent-shell-crew--session-config (role root socket)
-  "Return the agent-shell config for ROLE in ROOT, reaching SOCKET."
-  (let* ((spec (agent-shell-crew--role role))
-         (maker (plist-get spec :config-maker))
-         (member (agent-shell-crew-member-name role root))
+(defun agent-shell-crew--session-config (role root socket &optional name)
+  "Return the agent-shell config for ROLE in ROOT, reaching SOCKET.
+NAME, when non-nil, is the member's name instead of ROLE."
+  (let* ((maker (or (plist-get (agent-shell-crew--role role) :config-maker)
+                    #'agent-shell-anthropic-make-claude-code-config))
+         (member (agent-shell-crew-member-name (or name role) root))
          (config (progn
                    (unless (fboundp maker) (require 'agent-shell-anthropic nil t))
                    (copy-alist (funcall maker)))))
@@ -143,29 +176,29 @@ member submits input, finishes a turn, or asks for or gets permission.")
                   (list (agent-shell-crew--mcp-server member root socket))))
     config))
 
-(defun agent-shell-crew--brief (role)
-  "Return ROLE's brief text."
-  (let ((brief (plist-get (agent-shell-crew--role role) :brief)))
-    (cond ((and (stringp brief) (file-name-absolute-p brief) (file-readable-p brief))
-           (with-temp-buffer (insert-file-contents brief) (string-trim (buffer-string))))
-          ((stringp brief) brief)
-          (t ""))))
+(defun agent-shell-crew--brief (role &optional override)
+  "Return the brief text for ROLE, or OVERRIDE when non-nil.
+Either may be an absolute file name or the text itself."
+  (let ((brief (or override (plist-get (agent-shell-crew--role role) :brief))))
+    (unless brief
+      (user-error "Crew role %s has no brief; give the member a :brief" role))
+    (let ((file (and (file-name-absolute-p brief) (expand-file-name brief))))
+      (if (and file (file-readable-p file))
+          (with-temp-buffer (insert-file-contents file) (string-trim (buffer-string)))
+        brief))))
 
-(defun agent-shell-crew--intro (role member root)
-  "Return the first prompt for MEMBER, who has ROLE in ROOT's crew."
+(defun agent-shell-crew--intro (role member root &optional brief)
+  "Return the first prompt for MEMBER, who has ROLE in ROOT's crew.
+BRIEF overrides ROLE's brief."
   (let ((owned (seq-filter (lambda (item) (member (plist-get item :state) '("PENDING" "ACTIVE" "PARKED")))
                            (agent-shell-crew-queue-list root member))))
     (concat (format "You are %s, the %s in this project's crew.  Your crew identity is %s; the crew_* tools act as you.\n\n"
                     member role member)
-            (agent-shell-crew--brief role)
+            (agent-shell-crew--brief role brief)
             (if owned
                 (format "\n\nYou already own: %s.  Start with crew_mine."
                         (mapconcat (lambda (item) (plist-get item :id)) owned ", "))
               ""))))
-
-(defun agent-shell-crew--normal-root (root)
-  "Return ROOT as an absolute directory name."
-  (file-name-as-directory (expand-file-name root)))
 
 (defun agent-shell-crew--member-buffer (member &optional root)
   "Return the live buffer of crew MEMBER, of the project at ROOT if given.
@@ -217,11 +250,11 @@ Held back while the session is starting up."
   (when-let* ((buffer (agent-shell-crew--member-buffer member root)))
     (agent-shell-crew--deliver buffer text)))
 
-(defun agent-shell-crew--adopt (buffer member role root)
+(defun agent-shell-crew--adopt (buffer member role root &optional brief)
   "Make BUFFER crew MEMBER in ROOT.
 Once the session is ready, send ROLE's brief -- unless ROLE is nil, as
 for a restarted session that already has its conversation -- then any
-nudges that arrived meanwhile."
+nudges that arrived meanwhile.  BRIEF overrides ROLE's brief."
   (with-current-buffer buffer
     ;; Never `rename-buffer' here: shell-maker finds the session's process
     ;; by the buffer's ORIGINAL name, so a renamed shell silently stops
@@ -240,7 +273,7 @@ nudges that arrived meanwhile."
                    (setq sent t)
                    (with-current-buffer buffer (setq agent-shell-crew--ready t))
                    (when role
-                     (agent-shell-crew--send buffer (agent-shell-crew--intro role member root)))
+                     (agent-shell-crew--send buffer (agent-shell-crew--intro role member root brief)))
                    (agent-shell-crew--flush buffer))))
     (dolist (event '(input-submitted turn-complete))
       (agent-shell-subscribe-to
@@ -258,6 +291,20 @@ nudges that arrived meanwhile."
   "Return the current project root, or `default-directory'."
   (if-let* ((project (project-current))) (project-root project) default-directory))
 
+(cl-defun agent-shell-crew--start-member (root role &key name directory brief socket)
+  "Start crew member NAME (default ROLE) of ROOT's crew and return its buffer.
+The session runs in DIRECTORY (default ROOT) but acts on ROOT's queue.
+BRIEF overrides ROLE's brief.  SOCKET is the Emacs server to reach.
+Returns nil when the member is already running."
+  (let ((member (agent-shell-crew-member-name (or name role) root)))
+    (if (agent-shell-crew--member-buffer member root)
+        (progn (message "%s is already running" member) nil)
+      (let ((buffer (agent-shell-crew--start-new-session
+                     (agent-shell-crew--normal-root (or directory root))
+                     (agent-shell-crew--session-config role root socket name))))
+        (agent-shell-crew--adopt buffer member role root brief)
+        buffer))))
+
 ;;;###autoload
 (defun agent-shell-crew-start (root roles)
   "Start crew ROLES as agent-shell sessions in the directory ROOT.
@@ -266,24 +313,51 @@ Interactively, read ROOT and a comma-separated list of ROLES."
    (list (read-directory-name "Crew for directory: " (agent-shell-crew--default-root))
          (completing-read-multiple "Roles: " (mapcar #'car agent-shell-crew-roles)
                                    nil t nil nil "owner,check")))
-  (let ((root (file-name-as-directory (expand-file-name root)))
-        (socket (agent-shell-crew--server-socket)))
+  (let ((root (agent-shell-crew--normal-root root)))
     (dolist (role roles)
-      (let ((member (agent-shell-crew-member-name role root)))
-        (if (agent-shell-crew--member-buffer member root)
-            (message "%s is already running" member)
-          (let ((config (agent-shell-crew--session-config role root socket)))
-            (agent-shell-crew--adopt (agent-shell-crew--start-new-session root config)
-                                     member role root)))))))
+      (unless (agent-shell-crew--role role) (user-error "Unknown crew role: %s" role)))
+    (let ((socket (agent-shell-crew--server-socket)))
+      (delq nil (mapcar (lambda (role) (agent-shell-crew--start-member root role :socket socket))
+                        roles)))))
 
-(defun agent-shell-crew--start-new-session (root config)
-  "Start a NEW agent-shell session with CONFIG in ROOT and return its buffer.
+;;;###autoload
+(defun agent-shell-crew-start-profile (name)
+  "Start every member of crew profile NAME that is not already running.
+See `agent-shell-crew-profiles'.  The whole profile is checked first:
+a missing directory or a role with no brief starts nothing."
+  (interactive
+   (list (completing-read "Crew profile: " (mapcar #'car agent-shell-crew-profiles) nil t)))
+  (let* ((profile (or (assoc name agent-shell-crew-profiles)
+                      (user-error "No crew profile named %s" name)))
+         (root (agent-shell-crew--normal-root
+                (or (plist-get (cdr profile) :root)
+                    (user-error "Crew profile %s has no :root" name))))
+         (specs (plist-get (cdr profile) :members)))
+    (dolist (spec specs)
+      (let ((dir (plist-get spec :directory)))
+        (when (and dir (not (file-directory-p dir)))
+          (user-error "Crew member %s: no directory %s" (agent-shell-crew--spec-name spec) dir)))
+      (unless (or (plist-get spec :brief) (agent-shell-crew--role (plist-get spec :role)))
+        (user-error "Crew member %s: role %s has no brief"
+                    (agent-shell-crew--spec-name spec) (plist-get spec :role))))
+    (let ((socket (agent-shell-crew--server-socket)))
+      (delq nil (mapcar (lambda (spec)
+                          (agent-shell-crew--start-member
+                           root (plist-get spec :role)
+                           :name (plist-get spec :name)
+                           :directory (plist-get spec :directory)
+                           :brief (plist-get spec :brief)
+                           :socket socket))
+                        specs)))))
+
+(defun agent-shell-crew--start-new-session (directory config)
+  "Start a NEW agent-shell session with CONFIG in DIRECTORY; return its buffer.
 Bound from a temporary buffer: a caller in an agent-shell buffer has its
 own buffer-local `agent-shell-session-strategy', which a plain `let'
 would bind instead, leaving the new session to ask which session to
 resume.  The buffer is named after the member when it is created."
   (with-temp-buffer
-    (let ((default-directory root)
+    (let ((default-directory directory)
           (agent-shell-session-strategy 'new)
           (agent-shell-crew--starting t)
           ;; Name the buffer exactly after the member (the config's

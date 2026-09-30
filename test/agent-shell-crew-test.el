@@ -282,5 +282,89 @@
     (should (member "lead@my-app" (agent-shell-crew--owner-candidates root)))
     (should-not (member "human" (agent-shell-crew--owner-candidates root)))))
 
+;;; Profiles.
+
+(defun crew-profile-test--dir (parent name)
+  "Make and return directory NAME under PARENT, without a trailing slash."
+  (let ((dir (expand-file-name name parent))) (make-directory dir t) dir))
+
+(defmacro crew-profile-test--with (vars &rest body)
+  "Bind VARS (ROOT LANE GATE-BRIEF) around a profile named \"app\" and run BODY."
+  (declare (indent 1))
+  (let ((root (nth 0 vars)) (lane (nth 1 vars)) (brief (nth 2 vars)))
+    `(crew-main-test--with ,root
+       (let* ((parent (file-name-directory (directory-file-name ,root)))
+              (,lane (crew-profile-test--dir parent "my-app-lane-1"))
+              (,brief (let ((f (make-temp-file "gate-brief" nil ".md")))
+                        (with-temp-file f (insert "You gate. Bundle and run the full check once."))
+                        f))
+              (agent-shell-crew-profiles
+               `(("app" :root ,,root
+                  :members ((:role "owner" :name "owner-1" :directory ,,lane)
+                            (:role "check" :name "check-1" :directory ,,lane)
+                            (:role "gate" :brief ,,brief))))))
+         ,@body))))
+
+(ert-deftest crew-profile-members ()
+  (crew-profile-test--with (root lane brief)
+    (ignore lane brief)
+    (should (equal (agent-shell-crew-members root)
+                   '("human" "owner-1@my-app" "check-1@my-app" "gate@my-app")))
+    (let ((other (crew-profile-test--dir (make-temp-file "crew-o" t) "other")))
+      (should (member "lead@other" (agent-shell-crew-members other))))))
+
+(ert-deftest crew-start-profile-each-member-in-its-directory ()
+  (crew-profile-test--with (root lane brief)
+    (ignore brief)
+    (agent-shell-crew-start-profile "app")
+    (let ((starts (reverse (seq-filter (lambda (c) (eq (car c) 'start)) agent-shell-test--calls))))
+      (should (= (length starts) 3))
+      (should (equal (mapcar (lambda (c) (nth 2 c)) starts)
+                     (list (file-name-as-directory lane) (file-name-as-directory lane) root)))
+      (dolist (c starts)
+        (let* ((config (nth 1 c))
+               (crew (seq-find (lambda (s) (equal (alist-get 'name s) "agent-shell-crew"))
+                               (alist-get :mcp-servers config)))
+               (env (alist-get 'env crew)))
+          (should (seq-find (lambda (e) (and (equal (alist-get 'name e) "CREW_PROJECT")
+                                             (equal (alist-get 'value e) root)))
+                            env)))))
+    (should (buffer-live-p (agent-shell-crew--member-buffer "owner-1@my-app" root)))
+    (should (buffer-live-p (agent-shell-crew--member-buffer "gate@my-app" root)))
+    (should (equal (buffer-name (agent-shell-crew--member-buffer "check-1@my-app" root))
+                   "check-1@my-app"))))
+
+(ert-deftest crew-start-profile-brief-override ()
+  (crew-profile-test--with (root lane brief)
+    (ignore lane brief)
+    (agent-shell-crew-start-profile "app")
+    (let ((gate (agent-shell-crew--member-buffer "gate@my-app" root)))
+      (cl-letf (((symbol-function 'agent-shell-crew--input-empty-p) (lambda (_b) t)))
+        (agent-shell-test--emit gate 'init-finished))
+      (let ((insert (seq-find (lambda (c) (and (eq (car c) 'insert) (eq (nth 4 c) gate)))
+                              agent-shell-test--calls)))
+        (should (string-match-p "You are gate@my-app, the gate" (nth 1 insert)))
+        (should (string-match-p "Bundle and run the full check once" (nth 1 insert)))))))
+
+(ert-deftest crew-start-profile-skips-running ()
+  (crew-profile-test--with (root lane brief)
+    (ignore root lane brief)
+    (agent-shell-crew-start-profile "app")
+    (agent-shell-crew-start-profile "app")
+    (should (= (length (seq-filter (lambda (c) (eq (car c) 'start)) agent-shell-test--calls)) 3))))
+
+(ert-deftest crew-start-profile-refuses-before-starting ()
+  (crew-profile-test--with (root lane brief)
+    (ignore lane brief)
+    (let ((agent-shell-crew-profiles
+           `(("bad-dir" :root ,root :members ((:role "owner" :directory "/nonexistent/lane")
+                                              (:role "check")))
+             ("bad-role" :root ,root :members ((:role "owner")
+                                               (:role "nobrief"))))))
+      (should-error (agent-shell-crew-start-profile "bad-dir") :type 'user-error)
+      (should-error (agent-shell-crew-start-profile "bad-role") :type 'user-error)
+      (should-error (agent-shell-crew-start-profile "missing") :type 'user-error)
+      (should (null (seq-filter (lambda (c) (eq (car c) 'start)) agent-shell-test--calls))))))
+
 (provide 'agent-shell-crew-test)
 ;;; agent-shell-crew-test.el ends here

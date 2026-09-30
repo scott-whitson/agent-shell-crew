@@ -117,5 +117,14 @@
       (should (equal (plist-get (agent-shell-crew-queue-get root id) :decision) "1 — yes"))
       (should (equal (car (car told)) "owner@my-app")))))
 
+(ert-deftest crew-list-shows-profile-members ()
+  (crew-list-test--with root
+    (let ((agent-shell-crew-profiles
+           `(("app" :root ,root :members ((:role "owner" :name "owner-1") (:role "check" :name "check-1"))))))
+      (let ((members (mapcar #'car (crew-list-test--rows root))))
+        (should (member "owner-1@my-app" members))
+        (should (member "check-1@my-app" members))
+        (should-not (member "lead@my-app" members))))))
+
 (provide 'agent-shell-crew-list-test)
 ;;; agent-shell-crew-list-test.el ends here

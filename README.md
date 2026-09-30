@@ -53,12 +53,28 @@ Clone and add to `load-path`, or with `use-package`:
 | `agent-shell-crew-roles` | `lead`, `owner`, `check`, with the briefs in `briefs/`, on Claude Code |
 | `agent-shell-crew-mcp-program` | the bundled `bin/agent-shell-crew-mcp` |
 | `agent-shell-crew-python` | `python3` |
+| `agent-shell-crew-profiles` | none; see Profiles below |
 
 To show parked items in your agenda:
 `(add-to-list 'org-agenda-files agent-shell-crew-directory)`.
 
 For your own status display, use `agent-shell-crew-parked` and
 `agent-shell-crew-changed-hook` instead of the mode-line mode.
+
+### Profiles
+
+One crew, one queue, members in several worktrees — for parallel lanes:
+
+```elisp
+(setq agent-shell-crew-profiles
+      '(("my-app" :root "~/src/my-app/"
+         :members ((:role "owner" :name "owner-1" :directory "~/src/my-app-lane-1/")
+                   (:role "check" :name "check-1" :directory "~/src/my-app-lane-1/")
+                   (:role "gate" :directory "~/src/my-app-gate/" :brief "~/briefs/gate.md")))))
+```
+
+`M-x agent-shell-crew-start-profile` starts every member not already running.
+The package does not create worktrees; that is your setup.
 
 ## Development
 
