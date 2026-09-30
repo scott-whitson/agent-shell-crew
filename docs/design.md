@@ -68,7 +68,7 @@ nothing is written into the repository.
 **Only Emacs writes it**, and a write that fails part-way is discarded, never
 saved. Counting parked items reads the files on disk, skipping lock files and
 sync-conflict copies, so a hand edit in one queue never breaks the others.
-**Only Emacs writes it.** Agents act through the MCP tool, which calls into
+Agents act through the MCP tool, which calls into
 Emacs, and Emacs is single-threaded — two agents cannot interleave a write.
 Assumption: a project's crew runs on one machine at a time. (Syncing the
 directory between machines is fine; running the same project's crew on two at
