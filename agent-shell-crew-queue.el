@@ -120,11 +120,13 @@ has unsaved edits, so a hand edit is never silently written over."
 
 (defun agent-shell-crew--log (format-string &rest args)
   "Append a timestamped log line built from FORMAT-STRING and ARGS.
-Point must be inside the item; the Log child is its last child."
-  (org-back-to-heading t)
-  (org-end-of-subtree t t)
-  (unless (bolp) (insert "\n"))
-  (insert (format "- %s %s\n" (agent-shell-crew--now) (apply #'format format-string args))))
+Point must be inside the item; the Log child is its last child.
+Point does not move, so the item can still be read afterwards."
+  (save-excursion
+    (org-back-to-heading t)
+    (org-end-of-subtree t t)
+    (unless (bolp) (insert "\n"))
+    (insert (format "- %s %s\n" (agent-shell-crew--now) (apply #'format format-string args)))))
 
 (defun agent-shell-crew--clean-line (text)
   "Collapse TEXT onto one trimmed line."
@@ -216,6 +218,133 @@ optional strings."
     (if owner
         (seq-filter (lambda (item) (equal (plist-get item :owner) owner)) items)
       items)))
+
+(defmacro agent-shell-crew--mutate (root id verb &rest body)
+  "Run BODY at item ID in ROOT's queue, then run the hook with VERB."
+  (declare (indent 3) (debug t))
+  `(prog1 (agent-shell-crew--with-queue ,root
+            (agent-shell-crew--goto ,id)
+            ,@body)
+     (run-hook-with-args 'agent-shell-crew-changed-hook ,root ,id ,verb)))
+
+(defun agent-shell-crew--require-owner (actor)
+  "Fail unless ACTOR owns the item at point."
+  (let ((owner (org-entry-get nil "OWNER")))
+    (unless (equal owner actor)
+      (agent-shell-crew--fail "%s does not own %s (owner: %s)"
+                              actor (org-entry-get nil "CREW_ID") owner))))
+
+(defun agent-shell-crew--require-state (&rest states)
+  "Fail unless the item at point is in one of STATES."
+  (let ((state (org-get-todo-state)))
+    (unless (member state states)
+      (agent-shell-crew--fail "%s is %s; this needs %s"
+                              (org-entry-get nil "CREW_ID") state
+                              (string-join states " or ")))))
+
+(defun agent-shell-crew--set-state (state)
+  "Set the item at point to STATE without the user's TODO side effects."
+  (org-back-to-heading t)
+  (let ((org-inhibit-logging t)
+        (org-todo-log-states nil)
+        (org-log-done nil)
+        (org-after-todo-state-change-hook nil)
+        (org-trigger-hook nil)
+        (org-blocker-hook nil))
+    (org-todo state)))
+
+(defun agent-shell-crew-queue-claim (root actor id)
+  "ACTOR claims item ID in ROOT's queue: PENDING to ACTIVE."
+  (agent-shell-crew--mutate root id 'claim
+    (agent-shell-crew--require-owner actor)
+    (agent-shell-crew--require-state "PENDING")
+    (agent-shell-crew--set-state "ACTIVE")
+    (agent-shell-crew--log "claimed by %s" actor)))
+
+(defun agent-shell-crew-queue-note (root actor id text)
+  "Append TEXT to item ID's log in ROOT's queue on behalf of ACTOR.
+Only the owner or the human may add notes."
+  (when (agent-shell-crew--blank-p text) (agent-shell-crew--fail "A note needs text"))
+  (agent-shell-crew--mutate root id 'note
+    (unless (equal actor "human") (agent-shell-crew--require-owner actor))
+    (agent-shell-crew--log "note by %s: %s" actor (agent-shell-crew--clean-line text))))
+
+(defun agent-shell-crew-queue-park (root actor id question &optional evidence)
+  "ACTOR parks item ID in ROOT's queue on the human with QUESTION.
+EVIDENCE, when non-blank, replaces the item's evidence."
+  (when (agent-shell-crew--blank-p question) (agent-shell-crew--fail "Parking needs a question"))
+  (agent-shell-crew--mutate root id 'park
+    (agent-shell-crew--require-owner actor)
+    (agent-shell-crew--require-state "ACTIVE")
+    (org-entry-put nil "QUESTION" (agent-shell-crew--clean-line question))
+    (unless (agent-shell-crew--blank-p evidence) (org-entry-put nil "EVIDENCE" evidence))
+    (agent-shell-crew--set-state "PARKED")
+    (agent-shell-crew--log "parked on human by %s: %s" actor (agent-shell-crew--clean-line question))))
+
+(defun agent-shell-crew-queue-decide (root id decision)
+  "Record the human's DECISION on parked item ID in ROOT's queue.
+Returns the item's owner, who should be told."
+  (when (agent-shell-crew--blank-p decision) (agent-shell-crew--fail "A decision needs text"))
+  (agent-shell-crew--mutate root id 'decide
+    (agent-shell-crew--require-state "PARKED")
+    (org-entry-put nil "DECISION" (agent-shell-crew--clean-line decision))
+    (agent-shell-crew--set-state "ACTIVE")
+    (agent-shell-crew--log "decided by human: %s" (agent-shell-crew--clean-line decision))
+    (org-entry-get nil "OWNER")))
+
+(defun agent-shell-crew-queue-done (root actor id reason &optional canceled)
+  "ACTOR closes item ID in ROOT's queue for REASON.
+The item becomes CANCELED when CANCELED is non-nil, DONE otherwise."
+  (agent-shell-crew--mutate root id 'done
+    (agent-shell-crew--require-owner actor)
+    (agent-shell-crew--require-state "PENDING" "ACTIVE")
+    (agent-shell-crew--set-state (if canceled "CANCELED" "DONE"))
+    (agent-shell-crew--log "%s by %s: %s" (if canceled "canceled" "done") actor
+                           (if (agent-shell-crew--blank-p reason) "-"
+                             (agent-shell-crew--clean-line reason)))))
+
+(defun agent-shell-crew-queue-handoff (root actor id to summary &optional brief)
+  "ACTOR hands item ID in ROOT's queue to TO with SUMMARY and BRIEF.
+Closes ID as HANDED and returns the id of the new item TO owns."
+  (when (agent-shell-crew--blank-p to) (agent-shell-crew--fail "A hand-off needs a recipient"))
+  (when (equal to actor) (agent-shell-crew--fail "%s cannot hand off to itself" actor))
+  (when (agent-shell-crew--blank-p summary) (agent-shell-crew--fail "A hand-off needs a summary"))
+  (let ((source (agent-shell-crew--mutate root id 'handoff
+                  (agent-shell-crew--require-owner actor)
+                  (agent-shell-crew--require-state "ACTIVE")
+                  (agent-shell-crew--set-state "HANDED")
+                  (agent-shell-crew--log "handed to %s: %s" to (agent-shell-crew--clean-line summary))
+                  (agent-shell-crew--read-item))))
+    (agent-shell-crew-queue-create
+     root actor
+     :title (plist-get source :title)
+     :owner to
+     :parent id
+     :evidence (plist-get source :evidence)
+     :ref (plist-get source :ref)
+     :brief (concat "Handed off by " actor ": " summary
+                    (if (agent-shell-crew--blank-p brief) "" (concat "\n\n" brief))))))
+
+(defun agent-shell-crew--file-root (file)
+  "Return the project root recorded in queue FILE, or nil."
+  (with-temp-buffer
+    (insert-file-contents file nil 0 4096)
+    (goto-char (point-min))
+    (when (re-search-forward "^#\\+CREW_ROOT: \\(.+\\)$" nil t)
+      (match-string-no-properties 1))))
+
+(defun agent-shell-crew-parked ()
+  "Return every PARKED item in every project as (ROOT . ITEM) pairs."
+  (when (file-directory-p agent-shell-crew-directory)
+    (apply #'append
+           (mapcar
+            (lambda (file)
+              (when-let* ((root (agent-shell-crew--file-root file))
+                          ((file-directory-p root)))
+                (mapcar (lambda (item) (cons root item))
+                        (seq-filter (lambda (item) (equal (plist-get item :state) "PARKED"))
+                                    (agent-shell-crew-queue-list root)))))
+            (directory-files agent-shell-crew-directory t "\\.org\\'")))))
 
 (provide 'agent-shell-crew-queue)
 ;;; agent-shell-crew-queue.el ends here

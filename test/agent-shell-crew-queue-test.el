@@ -112,5 +112,111 @@
     (should-error (agent-shell-crew-queue-create root "human" :title "B" :owner "o@x")
                   :type 'agent-shell-crew-error)))
 
+(defun crew-test--new (root &optional owner)
+  "Create a PENDING item in ROOT for OWNER (default owner@x) and return its id."
+  (agent-shell-crew-queue-create root "human" :title "T" :owner (or owner "owner@x")))
+
+(ert-deftest crew-queue-claim ()
+  (crew-test--with-project root
+    (let ((id (crew-test--new root)))
+      (agent-shell-crew-queue-claim root "owner@x" id)
+      (should (equal (plist-get (agent-shell-crew-queue-get root id) :state) "ACTIVE"))
+      (should-error (agent-shell-crew-queue-claim root "owner@x" id) :type 'agent-shell-crew-error))))
+
+(ert-deftest crew-queue-only-owner-acts ()
+  (crew-test--with-project root
+    (let ((id (crew-test--new root)))
+      (should-error (agent-shell-crew-queue-claim root "check@x" id) :type 'agent-shell-crew-error)
+      (agent-shell-crew-queue-claim root "owner@x" id)
+      (should-error (agent-shell-crew-queue-park root "check@x" id "Q?") :type 'agent-shell-crew-error)
+      (should-error (agent-shell-crew-queue-done root "check@x" id "r") :type 'agent-shell-crew-error)
+      (should-error (agent-shell-crew-queue-handoff root "check@x" id "human" "s")
+                    :type 'agent-shell-crew-error))))
+
+(ert-deftest crew-queue-note-appends ()
+  (crew-test--with-project root
+    (let ((id (crew-test--new root)))
+      (agent-shell-crew-queue-note root "owner@x" id "looked at it")
+      (agent-shell-crew-queue-note root "human" id "fine by me")
+      (let ((log (plist-get (agent-shell-crew-queue-get root id) :log)))
+        (should (= (length log) 3))
+        (should (string-match-p "note by owner@x: looked at it" (nth 1 log)))
+        (should (string-match-p "note by human: fine by me" (nth 2 log)))))))
+
+(ert-deftest crew-queue-park-and-decide ()
+  (crew-test--with-project root
+    (let ((id (crew-test--new root)))
+      (agent-shell-crew-queue-claim root "owner@x" id)
+      (should-error (agent-shell-crew-queue-park root "owner@x" id "  ") :type 'agent-shell-crew-error)
+      (agent-shell-crew-queue-park root "owner@x" id "Pick: (1) a; (2) b" "notes/q.md")
+      (let ((item (agent-shell-crew-queue-get root id)))
+        (should (equal (plist-get item :state) "PARKED"))
+        (should (equal (plist-get item :question) "Pick: (1) a; (2) b"))
+        (should (equal (plist-get item :evidence) "notes/q.md")))
+      (should (equal (agent-shell-crew-queue-decide root id "1 — a") "owner@x"))
+      (let ((item (agent-shell-crew-queue-get root id)))
+        (should (equal (plist-get item :state) "ACTIVE"))
+        (should (equal (plist-get item :decision) "1 — a"))
+        (should (string-match-p "decided by human: 1 — a" (car (last (plist-get item :log))))))
+      (should-error (agent-shell-crew-queue-decide root id "again") :type 'agent-shell-crew-error))))
+
+(ert-deftest crew-queue-done-and-canceled ()
+  (crew-test--with-project root
+    (let ((a (crew-test--new root)) (b (crew-test--new root)))
+      (agent-shell-crew-queue-claim root "owner@x" a)
+      (agent-shell-crew-queue-done root "owner@x" a "shipped")
+      (agent-shell-crew-queue-done root "owner@x" b "not needed" t)
+      (should (equal (plist-get (agent-shell-crew-queue-get root a) :state) "DONE"))
+      (should (equal (plist-get (agent-shell-crew-queue-get root b) :state) "CANCELED"))
+      (should-error (agent-shell-crew-queue-done root "owner@x" a "twice") :type 'agent-shell-crew-error))))
+
+(ert-deftest crew-queue-handoff-links ()
+  (crew-test--with-project root
+    (let* ((id (agent-shell-crew-queue-create root "human" :title "Build it" :owner "owner@x"
+                                              :evidence "e.md" :ref "T-2")))
+      (agent-shell-crew-queue-claim root "owner@x" id)
+      (should-error (agent-shell-crew-queue-handoff root "owner@x" id "owner@x" "self")
+                    :type 'agent-shell-crew-error)
+      (let* ((new (agent-shell-crew-queue-handoff root "owner@x" id "check@x" "built; please verify"
+                                                  "Run the tests."))
+             (old (agent-shell-crew-queue-get root id))
+             (item (agent-shell-crew-queue-get root new)))
+        (should (equal (plist-get old :state) "HANDED"))
+        (should (string-match-p "handed to check@x: built; please verify"
+                                (car (last (plist-get old :log)))))
+        (should (equal (plist-get item :owner) "check@x"))
+        (should (equal (plist-get item :from) "owner@x"))
+        (should (equal (plist-get item :parent) id))
+        (should (equal (plist-get item :title) "Build it"))
+        (should (equal (plist-get item :evidence) "e.md"))
+        (should (equal (plist-get item :ref) "T-2"))
+        (should (string-match-p "built; please verify" (plist-get item :brief)))
+        (should (string-match-p "Run the tests." (plist-get item :brief)))))))
+
+(ert-deftest crew-queue-log-only-grows ()
+  (crew-test--with-project root
+    (let ((id (crew-test--new root)) (counts nil))
+      (push (length (plist-get (agent-shell-crew-queue-get root id) :log)) counts)
+      (agent-shell-crew-queue-claim root "owner@x" id)
+      (push (length (plist-get (agent-shell-crew-queue-get root id) :log)) counts)
+      (agent-shell-crew-queue-park root "owner@x" id "Q?")
+      (push (length (plist-get (agent-shell-crew-queue-get root id) :log)) counts)
+      (agent-shell-crew-queue-decide root id "yes")
+      (push (length (plist-get (agent-shell-crew-queue-get root id) :log)) counts)
+      (should (equal (nreverse counts) '(1 2 3 4))))))
+
+(ert-deftest crew-queue-parked-across-projects ()
+  (crew-test--with-project root
+    (let* ((other (let ((d (expand-file-name "other-app/" (make-temp-file "crew-root" t))))
+                    (make-directory d t) d))
+           (a (crew-test--new root)) (b (crew-test--new other)))
+      (dolist (pair (list (cons root a) (cons other b)))
+        (agent-shell-crew-queue-claim (car pair) "owner@x" (cdr pair))
+        (agent-shell-crew-queue-park (car pair) "owner@x" (cdr pair) "Q?"))
+      (let ((parked (agent-shell-crew-parked)))
+        (should (= (length parked) 2))
+        (should (member root (mapcar #'car parked)))
+        (should (member other (mapcar #'car parked)))))))
+
 (provide 'agent-shell-crew-queue-test)
 ;;; agent-shell-crew-queue-test.el ends here
