@@ -1,0 +1,122 @@
+#!/usr/bin/env python3
+# agent-shell-crew-mcp --- MCP server for agent-shell-crew  -*- mode: python -*-
+#
+# Copyright (C) 2026 Scott Whitson
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Speaks MCP (JSON-RPC 2.0, one message per line) on stdio and forwards each
+# crew_* tool call to Emacs as ONE call of `agent-shell-crew-rpc', with the
+# request base64-encoded JSON. The acting agent is CREW_AGENT from this
+# process's environment -- never a tool argument.
+"""agent-shell-crew MCP server."""
+import base64
+import json
+import os
+import subprocess
+import sys
+
+VERSION = "0.1.0"
+DEFAULT_PROTOCOL = "2025-06-18"
+
+def _tool(name, description, properties=None, required=()):
+    return {"name": name, "description": description,
+            "inputSchema": {"type": "object", "properties": properties or {},
+                            "required": list(required), "additionalProperties": False}}
+
+S = {"type": "string"}
+TOOLS = [
+    _tool("crew_mine", "List the crew items you own."),
+    _tool("crew_list", "List every crew item in this project."),
+    _tool("crew_show", "Show one crew item: brief, properties and log.", {"id": S}, ["id"]),
+    _tool("crew_create", "Create a crew item for a crew member, or for `human`.",
+          {"title": S, "brief": S, "owner": S, "evidence": S, "ref": S}, ["title", "brief", "owner"]),
+    _tool("crew_claim", "Claim an item you own: PENDING to ACTIVE.", {"id": S}, ["id"]),
+    _tool("crew_note", "Append a line to an item's log.", {"id": S, "text": S}, ["id", "text"]),
+    _tool("crew_handoff", "Close your item as HANDED and open a new item for `to`.",
+          {"id": S, "to": S, "summary": S, "brief": S}, ["id", "to", "summary"]),
+    _tool("crew_park", "Park your item on the human with a question. Write options inline as "
+          "`(1) ...; (2) ...` and point `evidence` at a file the human should read.",
+          {"id": S, "question": S, "evidence": S}, ["id", "question"]),
+    _tool("crew_done", "Close your item as DONE, or CANCELED when `canceled` is true.",
+          {"id": S, "reason": S, "canceled": {"type": "boolean"}}, ["id", "reason"]),
+]
+ALLOWED = {t["name"]: set(t["inputSchema"]["properties"]) for t in TOOLS}
+
+def call_emacs(verb, args):
+    """Send one request to Emacs; return (result, error)."""
+    request = {"actor": os.environ.get("CREW_AGENT", ""),
+               "project": os.environ.get("CREW_PROJECT", ""),
+               "verb": verb, "args": args}
+    payload = base64.b64encode(json.dumps(request).encode("utf-8")).decode("ascii")
+    cmd = [os.environ.get("CREW_EMACSCLIENT", "emacsclient")]
+    if os.environ.get("CREW_EMACS_SOCKET"):
+        cmd += ["-s", os.environ["CREW_EMACS_SOCKET"]]
+    cmd += ["--eval", '(agent-shell-crew-rpc "%s")' % payload]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except FileNotFoundError:
+        return None, "Could not reach Emacs: emacsclient not found"
+    except subprocess.TimeoutExpired:
+        return None, "Could not reach Emacs: no answer within 30 seconds"
+    if out.returncode != 0:
+        return None, "Could not reach Emacs: %s" % ((out.stderr or out.stdout).strip() or "exit %d" % out.returncode)
+    text = out.stdout.strip()
+    if len(text) >= 2 and text[0] == text[-1] == '"':
+        text = text[1:-1]
+    try:
+        reply = json.loads(base64.b64decode(text).decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return None, "Unexpected reply from Emacs: %s" % out.stdout.strip()[:200]
+    if reply.get("ok"):
+        return reply.get("result"), None
+    return None, reply.get("error") or "unknown error"
+
+def tool_result(text, is_error):
+    return {"content": [{"type": "text", "text": text}], "isError": is_error}
+
+def handle(message):
+    """Return the response for MESSAGE, or None for a notification."""
+    method, mid = message.get("method"), message.get("id")
+    if mid is None:
+        return None
+    if method == "initialize":
+        params = message.get("params") or {}
+        return {"jsonrpc": "2.0", "id": mid, "result": {
+            "protocolVersion": params.get("protocolVersion") or DEFAULT_PROTOCOL,
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "agent-shell-crew", "version": VERSION}}}
+    if method == "ping":
+        return {"jsonrpc": "2.0", "id": mid, "result": {}}
+    if method == "tools/list":
+        return {"jsonrpc": "2.0", "id": mid, "result": {"tools": TOOLS}}
+    if method == "tools/call":
+        params = message.get("params") or {}
+        name = params.get("name")
+        if name not in ALLOWED:
+            return {"jsonrpc": "2.0", "id": mid, "result": tool_result("Unknown tool: %s" % name, True)}
+        arguments = params.get("arguments") or {}
+        args = {k: v for k, v in arguments.items() if k in ALLOWED[name]}
+        result, error = call_emacs(name[len("crew_"):], args)
+        if error:
+            return {"jsonrpc": "2.0", "id": mid, "result": tool_result(error, True)}
+        return {"jsonrpc": "2.0", "id": mid,
+                "result": tool_result(json.dumps(result, indent=2, ensure_ascii=False), False)}
+    return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": "Method not found: %s" % method}}
+
+def main():
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            message = json.loads(line)
+        except ValueError:
+            response = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}}
+        else:
+            response = handle(message)
+        if response is not None:
+            sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
+            sys.stdout.flush()
+
+if __name__ == "__main__":
+    main()
