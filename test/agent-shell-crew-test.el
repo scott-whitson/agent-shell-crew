@@ -111,5 +111,68 @@
   (should (eq agent-shell-crew-rpc-members-function #'agent-shell-crew-members))
   (should (eq agent-shell-crew-rpc-notify-function #'agent-shell-crew--notify)))
 
+(ert-deftest crew-options-parse ()
+  (should (equal (agent-shell-crew--options "Pick: (1) numbers only - raise; (2) accept strings; (3) leave it.")
+                 '("1 — numbers only - raise" "2 — accept strings" "3 — leave it")))
+  (should (equal (agent-shell-crew--options "(1) yes (2) no") '("1 — yes" "2 — no")))
+  (should (null (agent-shell-crew--options "Should it?"))))
+
+(ert-deftest crew-new-creates-and-nudges ()
+  (crew-main-test--with root
+    (let ((told nil))
+      (cl-letf (((symbol-function 'agent-shell-crew--notify)
+                 (lambda (m _r tx) (push (list m tx) told))))
+        (let* ((id (agent-shell-crew-new root "owner@my-app" "Do it" "brief" "notes/e.md"))
+               (item (agent-shell-crew-queue-get root id)))
+          (should (equal (plist-get item :from) "human"))
+          (should (equal (plist-get item :evidence) "notes/e.md"))
+          (should (equal (car (car told)) "owner@my-app")))))))
+
+(ert-deftest crew-decide-records-and-nudges ()
+  (crew-main-test--with root
+    (let* ((id (agent-shell-crew-queue-create root "human" :title "T" :owner "owner@my-app"))
+           (told nil))
+      (agent-shell-crew-queue-claim root "owner@my-app" id)
+      (agent-shell-crew-queue-park root "owner@my-app" id "Pick (1) a; (2) b")
+      (cl-letf (((symbol-function 'agent-shell-crew--notify) (lambda (m _r tx) (push (list m tx) told)))
+                ((symbol-function 'completing-read)
+                 (lambda (_p coll &rest _) (if (equal coll '("1 — a" "2 — b")) "1 — a" (car coll)))))
+        (agent-shell-crew-decide))
+      (let ((item (agent-shell-crew-queue-get root id)))
+        (should (equal (plist-get item :state) "ACTIVE"))
+        (should (equal (plist-get item :decision) "1 — a")))
+      (should (equal (car (car told)) "owner@my-app"))
+      (should (string-match-p "1 — a" (nth 1 (car told)))))))
+
+(ert-deftest crew-decide-owner-not-running ()
+  (crew-main-test--with root
+    (let ((id (agent-shell-crew-queue-create root "human" :title "T" :owner "owner@my-app")))
+      (agent-shell-crew-queue-claim root "owner@my-app" id)
+      (agent-shell-crew-queue-park root "owner@my-app" id "OK?")
+      (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "yes")))
+        (agent-shell-crew-decide))
+      (should (equal (plist-get (agent-shell-crew-queue-get root id) :decision) "yes"))
+      (should (string-match-p (regexp-quote id)
+                              (agent-shell-crew--intro "owner" "owner@my-app" root))))))
+
+(ert-deftest crew-decide-nothing-waiting ()
+  (crew-main-test--with root
+    (ignore root)
+    (should-error (agent-shell-crew-decide) :type 'user-error)))
+
+(ert-deftest crew-mode-line-counts-parked ()
+  (crew-main-test--with root
+    (let ((global-mode-string nil))
+      (agent-shell-crew-mode-line-mode 1)
+      (unwind-protect
+          (let ((id (agent-shell-crew-queue-create root "human" :title "T" :owner "owner@my-app")))
+            (should (= agent-shell-crew--parked-count 0))
+            (agent-shell-crew-queue-claim root "owner@my-app" id)
+            (agent-shell-crew-queue-park root "owner@my-app" id "Q?")
+            (should (= agent-shell-crew--parked-count 1))
+            (should (member agent-shell-crew--mode-line global-mode-string)))
+        (agent-shell-crew-mode-line-mode -1))
+      (should-not (member agent-shell-crew--mode-line global-mode-string)))))
+
 (provide 'agent-shell-crew-test)
 ;;; agent-shell-crew-test.el ends here

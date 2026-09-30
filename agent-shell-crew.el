@@ -217,6 +217,104 @@ Interactively, read ROOT and a comma-separated list of ROLES."
                  (buffer (agent-shell-start :config (agent-shell-crew--session-config role root socket))))
             (agent-shell-crew--adopt buffer member role root)))))))
 
+(defun agent-shell-crew--options (question)
+  "Return the numbered options written inline in QUESTION.
+Options look like \"(1) first; (2) second\"."
+  (let ((start 0) options)
+    (while (string-match
+            "(\\([0-9]+\\))[ \t]*\\(.+?\\)[ \t]*\\(?:;\\|\\. \\|(\\([0-9]+\\))\\|\\.?\\'\\)"
+            question start)
+      (push (format "%s — %s" (match-string 1 question) (match-string 2 question)) options)
+      (setq start (if (match-beginning 3) (1- (match-beginning 3)) (match-end 0))))
+    (nreverse options)))
+
+;;;###autoload
+(defun agent-shell-crew-new (root owner title brief &optional evidence)
+  "Create an item in ROOT's crew for OWNER with TITLE, BRIEF and EVIDENCE.
+Returns the new item's id."
+  (interactive
+   (let* ((root (file-name-as-directory
+                 (expand-file-name (read-directory-name "Project: " (agent-shell-crew--default-root)))))
+          (owner (completing-read "For: " (remove "human" (agent-shell-crew-members root)) nil t))
+          (title (read-string "Title: "))
+          (brief (read-string "Brief: "))
+          (evidence (read-string "Evidence file (optional): ")))
+     (list root owner title brief (unless (string-empty-p evidence) evidence))))
+  (let ((id (agent-shell-crew-queue-create root "human" :title title :brief brief
+                                           :owner owner :evidence evidence)))
+    (agent-shell-crew--notify owner root (agent-shell-crew--nudge-text id title))
+    (message "Created %s for %s" id owner)
+    id))
+
+;;;###autoload
+(defun agent-shell-crew-decide ()
+  "Answer a crew item that is parked on you.
+Opens the item's evidence alongside, offers its numbered options, and
+tells the owner."
+  (interactive)
+  (let* ((parked (or (agent-shell-crew-parked) (user-error "Nothing is waiting on you")))
+         (table (mapcar (lambda (pair)
+                          (cons (format "[%s] %s (%s) — %s"
+                                        (agent-shell-crew-project-name (car pair))
+                                        (plist-get (cdr pair) :title) (plist-get (cdr pair) :id)
+                                        (truncate-string-to-width
+                                         (or (plist-get (cdr pair) :question) "") 80 nil nil "…"))
+                                pair))
+                        parked))
+         (choice (if (cdr table)
+                     (cdr (assoc (completing-read "Decide: " table nil t) table))
+                   (cdar table)))
+         (root (car choice))
+         (item (cdr choice))
+         (id (plist-get item :id))
+         (question (or (plist-get item :question) ""))
+         (evidence (plist-get item :evidence)))
+    (when evidence
+      (let ((file (expand-file-name evidence root)))
+        (when (file-readable-p file)
+          (display-buffer (find-file-noselect file) '(nil (inhibit-same-window . t))))))
+    (let ((decision (string-trim (completing-read (format "%s\nDecision: " question)
+                                                  (agent-shell-crew--options question)))))
+      (when (string-empty-p decision) (user-error "No decision given; nothing recorded"))
+      (let ((owner (agent-shell-crew-queue-decide root id decision)))
+        (agent-shell-crew--notify
+         owner root (format "Decision on crew item %s: %s.  Call crew_show with id %s." id decision id))
+        (message "Decided %s" id)))))
+
+;;;###autoload
+(defun agent-shell-crew-open (root)
+  "Open the crew queue file for the project at ROOT."
+  (interactive (list (read-directory-name "Project: " (agent-shell-crew--default-root))))
+  (find-file (agent-shell-crew-queue-file root)))
+
+(defvar agent-shell-crew--parked-count 0
+  "How many crew items wait on the human, as last counted.")
+
+(defconst agent-shell-crew--mode-line
+  '(:eval (when (> agent-shell-crew--parked-count 0)
+            (format " crew:%d" agent-shell-crew--parked-count)))
+  "The mode-line construct `agent-shell-crew-mode-line-mode' adds.")
+
+(defun agent-shell-crew--refresh-count (&rest _)
+  "Recount parked items and redraw mode lines."
+  (setq agent-shell-crew--parked-count (length (agent-shell-crew-parked)))
+  (force-mode-line-update t))
+
+;;;###autoload
+(define-minor-mode agent-shell-crew-mode-line-mode
+  "Show in the mode line how many crew items wait on you."
+  :global t
+  :group 'agent-shell-crew
+  (if agent-shell-crew-mode-line-mode
+      (progn
+        (unless (listp global-mode-string)
+          (setq global-mode-string (list global-mode-string)))
+        (add-to-list 'global-mode-string agent-shell-crew--mode-line t)
+        (add-hook 'agent-shell-crew-changed-hook #'agent-shell-crew--refresh-count)
+        (agent-shell-crew--refresh-count))
+    (setq global-mode-string (delete agent-shell-crew--mode-line global-mode-string))
+    (remove-hook 'agent-shell-crew-changed-hook #'agent-shell-crew--refresh-count)))
+
 (setq agent-shell-crew-rpc-members-function #'agent-shell-crew-members
       agent-shell-crew-rpc-notify-function #'agent-shell-crew--notify)
 
