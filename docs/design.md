@@ -1,6 +1,9 @@
 # agent-shell-crew — design
 
-**Status:** design, decisions settled; not yet planned or built
+**Status:** 0.1.0 built. First live run 2026-09-30 passed create → claim →
+hand-off → independent check → done, with real Claude Code sessions; it found
+four bugs the stub-based tests could not (see git log). The park → decide path
+is not yet exercised live.
 **Date:** 2026-09-30
 
 A small crew of [agent-shell](https://github.com/xenodium/agent-shell) sessions
