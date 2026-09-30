@@ -4,7 +4,7 @@ PYTHON ?= python3
 # `make check' runs anywhere; point it at the real packages for `api-check'.
 DEPS   ?= -L test/stubs
 EL      = agent-shell-crew-queue.el agent-shell-crew-rpc.el agent-shell-crew.el
-TESTS   = $(wildcard test/agent-shell-crew-*-test.el)
+TESTS   = $(wildcard test/agent-shell-crew*-test.el)
 UNIT    = $(filter-out test/agent-shell-crew-api-test.el,$(TESTS))
 
 .PHONY: check compile checkdoc test api-check clean
