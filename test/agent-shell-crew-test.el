@@ -400,5 +400,27 @@
         (should-error (agent-shell-crew-start-profile name) :type 'user-error))
       (should (null (seq-filter (lambda (c) (eq (car c) 'start)) agent-shell-test--calls))))))
 
+(ert-deftest crew-read-root-uses-the-running-crew-without-asking ()
+  (crew-main-test--with root
+    (agent-shell-crew-start root '("owner"))
+    (cl-letf (((symbol-function 'read-directory-name) (lambda (&rest _) (error "Asked")))
+              ((symbol-function 'completing-read) (lambda (&rest _) (error "Asked"))))
+      (with-temp-buffer (should (equal (agent-shell-crew--read-root "Crew: ") root))))))
+
+(ert-deftest crew-read-root-inside-a-member-uses-its-crew ()
+  (crew-main-test--with root
+    (let* ((other (let ((d (expand-file-name "other/" (make-temp-file "crew-o" t)))) (make-directory d t) d))
+           (mine (car (agent-shell-crew-start root '("owner")))))
+      (agent-shell-crew-start other '("owner"))
+      (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) (error "Asked"))))
+        (with-current-buffer mine (should (equal (agent-shell-crew--read-root "Crew: ") root))))
+      (cl-letf (((symbol-function 'completing-read) (lambda (_p coll &rest _) (car (last coll)))))
+        (with-temp-buffer (should (member (agent-shell-crew--read-root "Crew: ") (list root other))))))))
+
+(ert-deftest crew-read-root-no-crew-asks-for-a-directory ()
+  (crew-main-test--with root
+    (cl-letf (((symbol-function 'read-directory-name) (lambda (&rest _) root)))
+      (with-temp-buffer (should (equal (agent-shell-crew--read-root "Crew: ") root))))))
+
 (provide 'agent-shell-crew-test)
 ;;; agent-shell-crew-test.el ends here

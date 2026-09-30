@@ -132,7 +132,7 @@ kept, so nothing open is hidden."
 (defun agent-shell-crew-list (root)
   "Show the crew of the project at ROOT: members, status and work.
 Returns the list buffer."
-  (interactive (list (read-directory-name "Crew for directory: " (agent-shell-crew--default-root))))
+  (interactive (list (agent-shell-crew--read-root "Crew: ")))
   (let* ((root (agent-shell-crew--normal-root root))
          (buffer (get-buffer-create (format "*crew: %s*" (agent-shell-crew-project-name root)))))
     (with-current-buffer buffer

@@ -289,6 +289,23 @@ nudges that arrived meanwhile.  BRIEF overrides ROLE's brief."
                        (run-hook-with-args 'agent-shell-crew-session-changed-hook root)
                      (error nil)))))))
 
+(defun agent-shell-crew--running-roots ()
+  "Return the roots of every crew with a running member, most recent first."
+  (delete-dups
+   (delq nil (mapcar (lambda (buffer) (buffer-local-value 'agent-shell-crew--root buffer))
+                     (seq-filter (lambda (buffer) (buffer-local-value 'agent-shell-crew--member buffer))
+                                 (buffer-list))))))
+
+(defun agent-shell-crew--read-root (prompt)
+  "Return a crew root, asking with PROMPT only when it is not obvious.
+Inside a member's session, its crew; with one crew running, that one;
+with several, a choice among them; with none, a directory."
+  (let ((roots (agent-shell-crew--running-roots)))
+    (cond (agent-shell-crew--root agent-shell-crew--root)
+          ((null roots) (read-directory-name prompt (agent-shell-crew--default-root)))
+          ((null (cdr roots)) (car roots))
+          (t (completing-read prompt roots nil t nil nil (car roots))))))
+
 (defun agent-shell-crew--default-root ()
   "Return the current project root, or `default-directory'."
   (if-let* ((project (project-current))) (project-root project) default-directory))
@@ -490,7 +507,7 @@ tells the owner."
 ;;;###autoload
 (defun agent-shell-crew-open (root)
   "Open the crew queue file for the project at ROOT."
-  (interactive (list (read-directory-name "Project: " (agent-shell-crew--default-root))))
+  (interactive (list (agent-shell-crew--read-root "Crew: ")))
   (find-file (agent-shell-crew-queue-file root)))
 
 (defvar agent-shell-crew--parked-count 0
