@@ -3,7 +3,7 @@ PYTHON ?= python3
 # Where agent-shell and its dependencies live. The default is the stubs, so
 # `make check' runs anywhere; point it at the real packages for `api-check'.
 DEPS   ?= -L test/stubs
-EL      = agent-shell-crew-queue.el agent-shell-crew-rpc.el agent-shell-crew.el
+EL      = agent-shell-crew-queue.el agent-shell-crew-rpc.el agent-shell-crew.el agent-shell-crew-list.el
 TESTS   = $(wildcard test/agent-shell-crew*-test.el)
 UNIT    = $(filter-out test/agent-shell-crew-api-test.el,$(TESTS))
 

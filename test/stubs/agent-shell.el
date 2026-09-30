@@ -42,5 +42,9 @@
     (when (and (eq (nth 0 s) buffer) (eq (nth 1 s) event))
       (funcall (nth 2 s) (list (cons :event event))))))
 (defun agent-shell-buffers () "Stub." nil)
+(defvar-local agent-shell-test--status nil "What `agent-shell-status' reports for this buffer.")
+(cl-defun agent-shell-status (&key shell-buffer)
+  "Stub: the buffer's `agent-shell-test--status', default `ready'."
+  (or (buffer-local-value 'agent-shell-test--status (or shell-buffer (current-buffer))) 'ready))
 (provide 'agent-shell)
 ;;; agent-shell.el ends here

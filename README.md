@@ -38,7 +38,12 @@ Clone and add to `load-path`, or with `use-package`:
 3. Watch it claim the item, build, and hand it to `check@PROJECT`.
 4. When a member parks a question on you, the mode line shows `crew:1`.
    `M-x agent-shell-crew-decide` opens the evidence and offers the options.
-5. `M-x agent-shell-crew-open` shows the queue — it is just Org.
+5. `M-x agent-shell-crew-list` shows the whole crew in one buffer: every
+   member with its live status (working, blocked, ready, not running), the
+   items it owns and their state, and anything waiting on you. `RET` goes to a
+   member's session, `d` answers a parked item, `n` creates one, `o` opens the
+   queue, `g` refreshes. It updates itself as the crew works.
+6. `M-x agent-shell-crew-open` shows the queue file — it is just Org.
 
 ## Settings
 

@@ -88,6 +88,11 @@ Nudges wait until it is ready, so none is lost and none arrives before
 the member's brief.")
 (put 'agent-shell-crew--ready 'permanent-local t)
 
+(defvar agent-shell-crew-session-changed-hook nil
+  "Hook run when a crew session's status may have changed.
+Each function is called with the member's project root.  Runs when a
+member submits input, finishes a turn, or asks for or gets permission.")
+
 (defvar agent-shell-crew--starting nil
   "Non-nil while `agent-shell-crew-start' is creating a session.")
 
@@ -240,7 +245,14 @@ nudges that arrived meanwhile."
     (dolist (event '(input-submitted turn-complete))
       (agent-shell-subscribe-to
        :shell-buffer buffer :event event
-       :on-event (lambda (_event) (agent-shell-crew--flush buffer))))))
+       :on-event (lambda (_event) (agent-shell-crew--flush buffer))))
+    (dolist (event '(input-submitted turn-complete permission-request permission-response))
+      (agent-shell-subscribe-to
+       :shell-buffer buffer :event event
+       :on-event (lambda (_event)
+                   (condition-case nil
+                       (run-hook-with-args 'agent-shell-crew-session-changed-hook root)
+                     (error nil)))))))
 
 (defun agent-shell-crew--default-root ()
   "Return the current project root, or `default-directory'."
@@ -350,8 +362,8 @@ Returns the new item's id."
 ;;;###autoload
 (defun agent-shell-crew-decide ()
   "Answer a crew item that is parked on you.
-Opens the item's evidence alongside, offers its numbered options, and
-tells the owner."
+Pick among every parked item in every project; see
+`agent-shell-crew-decide-item'."
   (interactive)
   (let* ((parked (or (agent-shell-crew-parked) (user-error "Nothing is waiting on you")))
          (table (mapcar (lambda (pair)
@@ -364,12 +376,18 @@ tells the owner."
                         parked))
          (choice (if (cdr table)
                      (cdr (assoc (completing-read "Decide: " table nil t) table))
-                   (cdar table)))
-         (root (car choice))
-         (item (cdr choice))
-         (id (plist-get item :id))
+                   (cdar table))))
+    (agent-shell-crew-decide-item (car choice) (plist-get (cdr choice) :id))))
+
+(defun agent-shell-crew-decide-item (root id)
+  "Answer crew item ID of the project at ROOT, which is parked on you.
+Opens the item's evidence alongside, offers its numbered options, and
+tells the owner."
+  (let* ((item (agent-shell-crew-queue-get root id))
          (question (or (plist-get item :question) ""))
          (evidence (plist-get item :evidence)))
+    (unless (equal (plist-get item :state) "PARKED")
+      (user-error "%s is %s, not waiting on you" id (plist-get item :state)))
     (when evidence
       (let ((file (expand-file-name evidence root)))
         (when (file-readable-p file)
