@@ -65,9 +65,13 @@ item id, and the verb, a symbol such as `create' or `handoff'.")
   (file-name-nondirectory (directory-file-name (expand-file-name root))))
 
 (defun agent-shell-crew-queue-file (root)
-  "Return the queue file for the project at ROOT."
-  (expand-file-name (concat (agent-shell-crew-project-name root) ".org")
-                    agent-shell-crew-directory))
+  "Return the queue file for the project at ROOT.
+Named after the project and a short hash of its full path, so two
+projects in folders with the same name never share a queue."
+  (let ((dir (file-name-as-directory (expand-file-name root))))
+    (expand-file-name (format "%s-%s.org" (agent-shell-crew-project-name dir)
+                              (substring (secure-hash 'sha1 dir) 0 6))
+                      agent-shell-crew-directory)))
 
 (defun agent-shell-crew--ensure-header (root)
   "Give the current, empty buffer the queue header for ROOT."
@@ -86,6 +90,15 @@ item id, and the verb, a symbol such as `create' or `handoff'.")
                                 (buffer-file-name))
       (revert-buffer t t t))))
 
+(defun agent-shell-crew--discard-changes ()
+  "Throw away unsaved changes in the current queue buffer.
+Called when a write fails part-way, so a half-written item is never
+saved and never mistaken for a human's unsaved edit."
+  (if (and (buffer-file-name) (file-exists-p (buffer-file-name)))
+      (revert-buffer t t t)
+    (erase-buffer)
+    (set-buffer-modified-p nil)))
+
 (defmacro agent-shell-crew--with-queue (root &rest body)
   "Run BODY in the queue buffer for ROOT, then save it.
 Creates the file and its header when missing.  Refuses when the buffer
@@ -99,9 +112,20 @@ has unsaved edits, so a hand edit is never silently written over."
          (agent-shell-crew--fail "%s has unsaved edits; save or revert it first" file))
        (unless (derived-mode-p 'org-mode) (org-mode))
        (agent-shell-crew--ensure-header ,root)
-       (prog1 (save-excursion (save-restriction (widen) ,@body))
+       (prog1 (condition-case err
+                  (save-excursion (save-restriction (widen) ,@body))
+                (error (agent-shell-crew--discard-changes)
+                       (signal (car err) (cdr err))))
          (when (buffer-modified-p)
            (let ((save-silently t)) (save-buffer)))))))
+
+(defun agent-shell-crew--changed (root id verb)
+  "Run `agent-shell-crew-changed-hook' for ROOT, ID and VERB.
+The write is already saved, so a failing hook function is reported and
+never turned into an error for the caller."
+  (condition-case err
+      (run-hook-with-args 'agent-shell-crew-changed-hook root id verb)
+    (error (message "agent-shell-crew: changed-hook failed: %s" (error-message-string err)))))
 
 (defun agent-shell-crew--new-id ()
   "Return a fresh item id."
@@ -161,8 +185,10 @@ optional strings."
       (org-entry-put nil "OWNER" owner)
       (org-entry-put nil "FROM" actor)
       (unless (agent-shell-crew--blank-p parent) (org-entry-put nil "PARENT" parent))
-      (unless (agent-shell-crew--blank-p evidence) (org-entry-put nil "EVIDENCE" evidence))
-      (unless (agent-shell-crew--blank-p ref) (org-entry-put nil "REF" ref))
+      (unless (agent-shell-crew--blank-p evidence)
+        (org-entry-put nil "EVIDENCE" (agent-shell-crew--clean-line evidence)))
+      (unless (agent-shell-crew--blank-p ref)
+        (org-entry-put nil "REF" (agent-shell-crew--clean-line ref)))
       (org-end-of-subtree t t)
       (unless (bolp) (insert "\n"))
       (unless (agent-shell-crew--blank-p brief)
@@ -170,7 +196,7 @@ optional strings."
       (insert "** Log\n")
       (agent-shell-crew--goto id)
       (agent-shell-crew--log "created by %s for %s" actor owner))
-    (run-hook-with-args 'agent-shell-crew-changed-hook root id 'create)
+    (agent-shell-crew--changed root id 'create)
     id))
 
 (defun agent-shell-crew--read-item ()
@@ -230,7 +256,7 @@ optional strings."
   `(prog1 (agent-shell-crew--with-queue ,root
             (agent-shell-crew--goto ,id)
             ,@body)
-     (run-hook-with-args 'agent-shell-crew-changed-hook ,root ,id ,verb)))
+     (agent-shell-crew--changed ,root ,id ,verb)))
 
 (defun agent-shell-crew--require-owner (actor)
   "Fail unless ACTOR owns the item at point."
@@ -250,7 +276,9 @@ optional strings."
 (defun agent-shell-crew--set-state (state)
   "Set the item at point to STATE without the user's TODO side effects."
   (org-back-to-heading t)
-  (let ((org-inhibit-logging t)
+  (let ((org-loop-over-headlines-in-active-region nil)
+        (mark-active nil)
+        (org-inhibit-logging t)
         (org-todo-log-states nil)
         (org-log-done nil)
         (org-after-todo-state-change-hook nil)
@@ -282,7 +310,8 @@ EVIDENCE, when non-blank, replaces the item's evidence."
     (agent-shell-crew--require-owner actor)
     (agent-shell-crew--require-state "ACTIVE")
     (org-entry-put nil "QUESTION" (agent-shell-crew--clean-line question))
-    (unless (agent-shell-crew--blank-p evidence) (org-entry-put nil "EVIDENCE" evidence))
+    (unless (agent-shell-crew--blank-p evidence)
+      (org-entry-put nil "EVIDENCE" (agent-shell-crew--clean-line evidence)))
     (agent-shell-crew--set-state "PARKED")
     (agent-shell-crew--log "parked on human by %s: %s" actor (agent-shell-crew--clean-line question))))
 
@@ -338,17 +367,41 @@ Closes ID as HANDED and returns the id of the new item TO owns."
     (when (re-search-forward "^#\\+CREW_ROOT: \\(.+\\)$" nil t)
       (match-string-no-properties 1))))
 
+(defun agent-shell-crew--queue-file-root (file)
+  "Return FILE's project root when FILE is that project's queue, else nil.
+Lock files, sync-conflict copies and anything else in the directory
+fail this test, so they are never counted as queues."
+  (condition-case nil
+      (when (and (file-regular-p file)
+                 (not (string-prefix-p ".#" (file-name-nondirectory file))))
+        (when-let* ((root (agent-shell-crew--file-root file))
+                    ((equal (expand-file-name file) (agent-shell-crew-queue-file root))))
+          root))
+    (error nil)))
+
+(defun agent-shell-crew--file-items (file)
+  "Return the items in queue FILE, read from disk without visiting it."
+  (with-temp-buffer
+    (insert-file-contents file)
+    (let ((org-inhibit-startup t) (org-mode-hook nil)) (org-mode))
+    (let (acc)
+      (org-map-entries
+       (lambda () (when (org-entry-get nil "CREW_ID") (push (agent-shell-crew--read-item) acc)))
+       "LEVEL=1")
+      (nreverse acc))))
+
 (defun agent-shell-crew-parked ()
-  "Return every PARKED item in every project as (ROOT . ITEM) pairs."
+  "Return every PARKED item in every project as (ROOT . ITEM) pairs.
+Reads the files on disk, so an unsaved hand edit in any queue buffer
+never breaks it."
   (when (file-directory-p agent-shell-crew-directory)
     (apply #'append
            (mapcar
             (lambda (file)
-              (when-let* ((root (agent-shell-crew--file-root file))
-                          ((file-directory-p root)))
+              (when-let* ((root (agent-shell-crew--queue-file-root file)))
                 (mapcar (lambda (item) (cons root item))
                         (seq-filter (lambda (item) (equal (plist-get item :state) "PARKED"))
-                                    (agent-shell-crew-queue-list root)))))
+                                    (agent-shell-crew--file-items file)))))
             (directory-files agent-shell-crew-directory t "\\.org\\'")))))
 
 (provide 'agent-shell-crew-queue)

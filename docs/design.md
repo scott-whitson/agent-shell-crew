@@ -60,10 +60,14 @@ configuration is a consumer like any other.
 ## The queue file
 
 One Org file per project in `agent-shell-crew-directory` (default:
-`(locate-user-emacs-file "agent-shell-crew/")`), named after the project root:
-`my-app.org`. It lives outside the project, so nothing is written into the
-repository.
+`(locate-user-emacs-file "agent-shell-crew/")`), named after the project and a
+short hash of its full path: `my-app-1a2b3c.org`, so two projects in folders
+with the same name never share a queue. It lives outside the project, so
+nothing is written into the repository.
 
+**Only Emacs writes it**, and a write that fails part-way is discarded, never
+saved. Counting parked items reads the files on disk, skipping lock files and
+sync-conflict copies, so a hand edit in one queue never breaks the others.
 **Only Emacs writes it.** Agents act through the MCP tool, which calls into
 Emacs, and Emacs is single-threaded — two agents cannot interleave a write.
 Assumption: a project's crew runs on one machine at a time. (Syncing the
@@ -156,7 +160,15 @@ servers works.
 you made) and roles. For each role it calls `agent-shell-start` with a config
 from the role's maker, setting `:buffer-name` to `ROLE@PROJECT` and adding the
 crew MCP server to `:mcp-servers`; then sends the role's brief as the first
-prompt. The package does not manage git: bring your own worktree.
+prompt. Every member is a **new** session (`agent-shell-session-strategy` is
+bound to `new`), never a resumed one. Nudges that arrive while a session is
+starting wait until its brief has been sent. The package does not manage git:
+bring your own worktree.
+
+**Restart and fork.** agent-shell's restart and fork reuse a member's config.
+A restarted session — nobody else holds the identity — is adopted again. A fork
+made while the member is still running is left untracked, so there is never a
+second owner.
 
 Project rules (build, test, conventions) come from the repository's own
 `AGENTS.md`/`CLAUDE.md`, not from crew. The shipped briefs are generic.

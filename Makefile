@@ -20,12 +20,12 @@ checkdoc:
 	$(EMACS) -Q --batch -L . $(DEPS) -l test/checkdoc.el $(wildcard $(EL))
 
 test:
-	$(EMACS) -Q --batch -L . $(DEPS) -l ert \
+	$(EMACS) -Q --batch -L . $(DEPS) --eval '(setq load-prefer-newer t)' -l ert \
 	  $(foreach t,$(UNIT),-l $(t)) -f ert-run-tests-batch-and-exit
 	$(PYTHON) -m unittest discover -s test -p 'test_*.py'
 
 api-check:
-	$(EMACS) -Q --batch -L . $(DEPS) -l ert \
+	$(EMACS) -Q --batch -L . $(DEPS) --eval '(setq load-prefer-newer t)' -l ert \
 	  -l test/agent-shell-crew-api-test.el -f ert-run-tests-batch-and-exit
 
 clean:

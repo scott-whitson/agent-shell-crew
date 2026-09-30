@@ -31,6 +31,7 @@
 
 ;;; Code:
 
+(require 'map)
 (require 'project)
 (require 'seq)
 (require 'subr-x)
@@ -74,8 +75,23 @@ agent-shell config (see `agent-shell-make-agent-config')."
 (put 'agent-shell-crew--member 'permanent-local t)
 
 (defvar-local agent-shell-crew--pending nil
-  "Nudges waiting until this session's input is empty.")
+  "Nudges waiting until this session is ready and its input is empty.")
 (put 'agent-shell-crew--pending 'permanent-local t)
+
+(defvar-local agent-shell-crew--root nil
+  "The project root of this crew member's session, or nil.")
+(put 'agent-shell-crew--root 'permanent-local t)
+
+(defvar-local agent-shell-crew--ready t
+  "Nil while a crew session is still starting up.
+Nudges wait until it is ready, so none is lost and none arrives before
+the member's brief.")
+(put 'agent-shell-crew--ready 'permanent-local t)
+
+(defvar agent-shell-crew--starting nil
+  "Non-nil while `agent-shell-crew-start' is creating a session.")
+
+(defvar agent-shell-session-strategy)
 
 (defun agent-shell-crew-member-name (role root)
   "Return the member name for ROLE in the project at ROOT."
@@ -141,10 +157,20 @@ agent-shell config (see `agent-shell-make-agent-config')."
                         (mapconcat (lambda (item) (plist-get item :id)) owned ", "))
               ""))))
 
-(defun agent-shell-crew--member-buffer (member)
-  "Return the live buffer of crew MEMBER, or nil."
-  (seq-find (lambda (buffer) (equal (buffer-local-value 'agent-shell-crew--member buffer) member))
-            (buffer-list)))
+(defun agent-shell-crew--normal-root (root)
+  "Return ROOT as an absolute directory name."
+  (file-name-as-directory (expand-file-name root)))
+
+(defun agent-shell-crew--member-buffer (member &optional root)
+  "Return the live buffer of crew MEMBER, of the project at ROOT if given.
+Two projects in folders with the same name have members with the same
+name; ROOT tells them apart."
+  (let ((root (and root (agent-shell-crew--normal-root root))))
+    (seq-find (lambda (buffer)
+                (and (equal (buffer-local-value 'agent-shell-crew--member buffer) member)
+                     (or (null root)
+                         (equal (buffer-local-value 'agent-shell-crew--root buffer) root))))
+              (buffer-list))))
 
 (defun agent-shell-crew--input-empty-p (buffer)
   "Non-nil when BUFFER's shell input holds no text.
@@ -157,7 +183,15 @@ Anything uncertain counts as not empty, so a draft is never submitted."
       (error nil))))
 
 (defun agent-shell-crew--deliver (buffer text)
-  "Send TEXT to the session in BUFFER without disturbing it."
+  "Send TEXT to the session in BUFFER without disturbing it.
+Held back while the session is starting up."
+  (if (buffer-local-value 'agent-shell-crew--ready buffer)
+      (agent-shell-crew--send buffer text)
+    (with-current-buffer buffer
+      (setq agent-shell-crew--pending (append agent-shell-crew--pending (list text))))))
+
+(defun agent-shell-crew--send (buffer text)
+  "Send TEXT to the ready session in BUFFER without disturbing it."
   (with-current-buffer buffer
     (cond ((shell-maker-busy) (agent-shell-busy-submit-queue text))
           ((agent-shell-crew--input-empty-p buffer)
@@ -172,24 +206,31 @@ Anything uncertain counts as not empty, so a draft is never submitted."
         (with-current-buffer buffer (setq agent-shell-crew--pending nil))
         (dolist (text texts) (agent-shell-crew--deliver buffer text))))))
 
-(defun agent-shell-crew--notify (member _root text)
-  "Tell crew MEMBER TEXT if its session is running."
-  (when-let* ((buffer (agent-shell-crew--member-buffer member)))
+(defun agent-shell-crew--notify (member root text)
+  "Tell crew MEMBER of the project at ROOT TEXT if its session is running."
+  (when-let* ((buffer (agent-shell-crew--member-buffer member root)))
     (agent-shell-crew--deliver buffer text)))
 
 (defun agent-shell-crew--adopt (buffer member role root)
-  "Make BUFFER crew MEMBER with ROLE in ROOT and brief it once it is ready."
+  "Make BUFFER crew MEMBER in ROOT.
+Once the session is ready, send ROLE's brief -- unless ROLE is nil, as
+for a restarted session that already has its conversation -- then any
+nudges that arrived meanwhile."
   (with-current-buffer buffer
     (rename-buffer member t)
-    (setq agent-shell-crew--member member))
-  (let ((intro (agent-shell-crew--intro role member root))
-        (sent nil))
+    (setq agent-shell-crew--member member
+          agent-shell-crew--root (agent-shell-crew--normal-root root)
+          agent-shell-crew--ready nil))
+  (let ((sent nil))
     (agent-shell-subscribe-to
      :shell-buffer buffer :event 'prompt-ready
      :on-event (lambda (_event)
                  (unless sent
                    (setq sent t)
-                   (agent-shell-crew--deliver buffer intro))))
+                   (with-current-buffer buffer (setq agent-shell-crew--ready t))
+                   (when role
+                     (agent-shell-crew--send buffer (agent-shell-crew--intro role member root)))
+                   (agent-shell-crew--flush buffer))))
     (dolist (event '(input-submitted turn-complete))
       (agent-shell-subscribe-to
        :shell-buffer buffer :event event
@@ -211,11 +252,44 @@ Interactively, read ROOT and a comma-separated list of ROLES."
         (socket (agent-shell-crew--server-socket)))
     (dolist (role roles)
       (let ((member (agent-shell-crew-member-name role root)))
-        (if (agent-shell-crew--member-buffer member)
+        (if (agent-shell-crew--member-buffer member root)
             (message "%s is already running" member)
           (let* ((default-directory root)
+                 ;; A crew member is always a NEW session: agent-shell's
+                 ;; default strategy would ask which session to resume.
+                 (agent-shell-session-strategy 'new)
+                 (agent-shell-crew--starting t)
                  (buffer (agent-shell-start :config (agent-shell-crew--session-config role root socket))))
             (agent-shell-crew--adopt buffer member role root)))))))
+
+(defun agent-shell-crew--config-identity ()
+  "Return (MEMBER . ROOT) from this buffer's crew MCP server, or nil."
+  (when-let* ((servers (map-nested-elt (bound-and-true-p agent-shell--state)
+                                       '(:agent-config :mcp-servers)))
+              (crew (seq-find (lambda (s) (equal (alist-get 'name s) "agent-shell-crew"))
+                              (append servers nil)))
+              (env (alist-get 'env crew))
+              (value (lambda (name) (alist-get 'value (seq-find (lambda (e) (equal (alist-get 'name e) name))
+                                                               (append env nil)))))
+              (member (funcall value "CREW_AGENT"))
+              (root (funcall value "CREW_PROJECT")))
+    (cons member root)))
+
+(defun agent-shell-crew--maybe-adopt ()
+  "Track a session that carries a crew identity but was not started by crew.
+agent-shell's restart and fork reuse a member's config.  A restart,
+where nobody else holds the identity, is adopted again; a fork, made
+while the member is still running, is left untracked, so there is
+never a second owner."
+  (unless (or agent-shell-crew--starting agent-shell-crew--member)
+    (when-let* ((identity (agent-shell-crew--config-identity)))
+      (let ((holder (agent-shell-crew--member-buffer (car identity) (cdr identity))))
+        (if (and holder (not (eq holder (current-buffer))))
+            (message "agent-shell-crew: %s is already running; this copy is not a crew member"
+                     (car identity))
+          (agent-shell-crew--adopt (current-buffer) (car identity) nil (cdr identity)))))))
+
+(add-hook 'agent-shell-mode-hook #'agent-shell-crew--maybe-adopt)
 
 (defun agent-shell-crew--options (question)
   "Return the numbered options written inline in QUESTION.

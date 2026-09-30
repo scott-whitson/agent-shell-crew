@@ -4,6 +4,9 @@
 ;;; Code:
 (require 'cl-lib)
 (defvar agent-shell-mcp-servers nil "Stub.")
+(defvar agent-shell-session-strategy 'prompt "Stub.")
+(defvar-local agent-shell--state nil "Stub.")
+(defvar agent-shell-mode-hook nil "Stub.")
 (defvar agent-shell-test--calls nil "Recorded calls, newest first.")
 (defvar agent-shell-test--busy nil "What `shell-maker-busy' returns.")
 (defvar agent-shell-test--subscriptions nil "Recorded (BUFFER EVENT FN).")

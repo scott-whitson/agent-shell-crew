@@ -174,5 +174,83 @@
         (agent-shell-crew-mode-line-mode -1))
       (should-not (member agent-shell-crew--mode-line global-mode-string)))))
 
+;;; Final-review findings.
+
+(ert-deftest crew-start-asks-for-a-new-session ()
+  "Finding 3: every role gets a NEW session, never a picker or a resume."
+  (crew-main-test--with root
+    (let (seen)
+      (cl-letf* ((real (symbol-function 'agent-shell-start))
+                 ((symbol-function 'agent-shell-start)
+                  (lambda (&rest args) (push agent-shell-session-strategy seen) (apply real args))))
+        (let ((agent-shell-session-strategy 'prompt))
+          (agent-shell-crew-start root '("owner" "check"))))
+      (should (equal seen '(new new))))))
+
+(ert-deftest crew-nudge-before-ready-waits-for-intro ()
+  "Finding 4: nudges sent during bootstrap arrive after the intro, none lost."
+  (crew-main-test--with root
+    (agent-shell-crew-start root '("owner"))
+    (let ((owner (agent-shell-crew--member-buffer "owner@my-app" root)))
+      (agent-shell-crew--notify "owner@my-app" root "first nudge")
+      (agent-shell-crew--notify "owner@my-app" root "second nudge")
+      (should-not (seq-find (lambda (c) (eq (car c) 'insert)) agent-shell-test--calls))
+      (cl-letf (((symbol-function 'agent-shell-crew--input-empty-p) (lambda (_b) t)))
+        (agent-shell-test--emit owner 'prompt-ready))
+      (let ((texts (mapcar (lambda (c) (nth 1 c))
+                           (reverse (seq-filter (lambda (c) (eq (car c) 'insert)) agent-shell-test--calls)))))
+        (should (= (length texts) 3))
+        (should (string-match-p "You are owner@my-app" (nth 0 texts)))
+        (should (equal (cdr texts) '("first nudge" "second nudge")))))))
+
+(ert-deftest crew-intro-lists-items-created-during-bootstrap ()
+  "Finding 4: the intro's owned list is taken when the session is ready."
+  (crew-main-test--with root
+    (agent-shell-crew-start root '("owner"))
+    (let ((owner (agent-shell-crew--member-buffer "owner@my-app" root))
+          (id (agent-shell-crew-queue-create root "human" :title "Late" :owner "owner@my-app")))
+      (cl-letf (((symbol-function 'agent-shell-crew--input-empty-p) (lambda (_b) t)))
+        (agent-shell-test--emit owner 'prompt-ready))
+      (should (seq-find (lambda (c) (and (eq (car c) 'insert) (string-match-p (regexp-quote id) (nth 1 c))))
+                        agent-shell-test--calls)))))
+
+(ert-deftest crew-restarted-session-is-re-adopted ()
+  "Finding 5: a restart (same crew identity, no live holder) is tracked again."
+  (crew-main-test--with root
+    (let ((buf (generate-new-buffer "restarted")))
+      (with-current-buffer buf
+        (setq-local agent-shell--state
+                    (list (cons :agent-config
+                                (agent-shell-crew--session-config "owner" root "/tmp/s"))))
+        (agent-shell-crew--maybe-adopt))
+      (should (eq (agent-shell-crew--member-buffer "owner@my-app" root) buf)))))
+
+(ert-deftest crew-forked-session-is-not-a-second-owner ()
+  "Finding 5: a fork while the member is live is not adopted as a twin."
+  (crew-main-test--with root
+    (agent-shell-crew-start root '("owner"))
+    (let ((live (agent-shell-crew--member-buffer "owner@my-app" root))
+          (fork (generate-new-buffer "forked")))
+      (with-current-buffer fork
+        (setq-local agent-shell--state
+                    (list (cons :agent-config
+                                (agent-shell-crew--session-config "owner" root "/tmp/s"))))
+        (agent-shell-crew--maybe-adopt))
+      (should (eq (agent-shell-crew--member-buffer "owner@my-app" root) live))
+      (should-not (buffer-local-value 'agent-shell-crew--member fork))
+      (kill-buffer fork))))
+
+(ert-deftest crew-same-member-name-two-projects ()
+  "Finding 6: owner@app in two folders named app are different sessions."
+  (crew-main-test--with root
+    (ignore root)
+    (let ((a (let ((d (expand-file-name "app/" (make-temp-file "crew-a" t)))) (make-directory d t) d))
+          (b (let ((d (expand-file-name "app/" (make-temp-file "crew-b" t)))) (make-directory d t) d)))
+      (agent-shell-crew-start a '("owner"))
+      (agent-shell-crew-start b '("owner"))
+      (should (= (length (seq-filter (lambda (c) (eq (car c) 'start)) agent-shell-test--calls)) 2))
+      (should-not (eq (agent-shell-crew--member-buffer "owner@app" a)
+                      (agent-shell-crew--member-buffer "owner@app" b))))))
+
 (provide 'agent-shell-crew-test)
 ;;; agent-shell-crew-test.el ends here

@@ -7,6 +7,7 @@
 (require 'agent-shell)
 (require 'agent-shell-anthropic)
 (require 'help-fns)
+(require 'map)
 
 (ert-deftest crew-api-functions-exist ()
   (dolist (fn '(agent-shell-start agent-shell-insert agent-shell-busy-submit-queue
@@ -34,6 +35,21 @@
 
 (ert-deftest crew-api-mcp-servers-variable ()
   (should (boundp 'agent-shell-mcp-servers)))
+
+(ert-deftest crew-api-session-strategy-new ()
+  "`agent-shell-crew-start' binds the strategy to `new' for every member."
+  (should (boundp 'agent-shell-session-strategy))
+  (should (string-match-p "\\_<new\\_>"
+                          (format "%S" (get 'agent-shell-session-strategy 'custom-type)))))
+
+(ert-deftest crew-api-restart-detection ()
+  "Re-adoption reads the crew MCP server from the buffer's agent config.
+`agent-shell--state' is internal, so this guards it explicitly."
+  (should (boundp 'agent-shell-mode-hook))
+  (should (local-variable-if-set-p 'agent-shell--state))
+  (with-temp-buffer
+    (setq-local agent-shell--state (list (cons :agent-config (list (cons :mcp-servers '(x))))))
+    (should (equal (map-nested-elt agent-shell--state '(:agent-config :mcp-servers)) '(x)))))
 
 (provide 'agent-shell-crew-api-test)
 ;;; agent-shell-crew-api-test.el ends here

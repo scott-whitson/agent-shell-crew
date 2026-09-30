@@ -218,5 +218,97 @@
         (should (member root (mapcar #'car parked)))
         (should (member other (mapcar #'car parked)))))))
 
+;;; Final-review findings.
+
+(ert-deftest crew-queue-multiline-evidence-is-cleaned ()
+  "Finding 1: a newline in evidence or ref must not break the drawer."
+  (crew-test--with-project root
+    (let ((id (agent-shell-crew-queue-create root "human" :title "T" :owner "owner@x"
+                                             :evidence "x.md\ny.md" :ref "A\nB")))
+      (should (equal (plist-get (agent-shell-crew-queue-get root id) :evidence) "x.md y.md"))
+      (agent-shell-crew-queue-claim root "owner@x" id)
+      (agent-shell-crew-queue-park root "owner@x" id "Q?" "one\ntwo")
+      (should (= (length (agent-shell-crew-queue-list root)) 1))
+      (should (equal (plist-get (agent-shell-crew-queue-get root id) :evidence) "one two")))))
+
+(ert-deftest crew-queue-failed-write-rolls-back ()
+  "Finding 1: an error inside a write leaves the queue usable."
+  (crew-test--with-project root
+    (agent-shell-crew-queue-create root "human" :title "A" :owner "owner@x")
+    (should-error (agent-shell-crew--with-queue root
+                    (goto-char (point-max))
+                    (insert "* half-written\n")
+                    (error "Boom")))
+    (agent-shell-crew-queue-create root "human" :title "B" :owner "owner@x")
+    (should (equal (mapcar (lambda (i) (plist-get i :title)) (agent-shell-crew-queue-list root))
+                   '("A" "B")))))
+
+(ert-deftest crew-queue-parked-ignores-lock-and-conflict-files ()
+  "Finding 2: lock symlinks and sync-conflict copies are not queues."
+  (crew-test--with-project root
+    (let ((id (agent-shell-crew-queue-create root "human" :title "T" :owner "owner@x")))
+      (agent-shell-crew-queue-claim root "owner@x" id)
+      (agent-shell-crew-queue-park root "owner@x" id "Q?")
+      (let* ((file (agent-shell-crew-queue-file root))
+             (dir (file-name-directory file))
+             (base (file-name-nondirectory file)))
+        (make-symbolic-link "nobody@host.1234:0" (expand-file-name (concat ".#" base) dir))
+        (copy-file file (expand-file-name (concat (file-name-sans-extension base)
+                                                  ".sync-conflict-20260930-ABCDEF.org")
+                                          dir)))
+      (should (= (length (agent-shell-crew-parked)) 1)))))
+
+(ert-deftest crew-queue-parked-survives-unsaved-queue-buffer ()
+  "Finding 2: a hand edit in one queue must not break reads of all queues."
+  (crew-test--with-project root
+    (let* ((other (let ((d (expand-file-name "other-app/" (make-temp-file "crew-root" t))))
+                    (make-directory d t) d))
+           (id (agent-shell-crew-queue-create root "human" :title "T" :owner "owner@x")))
+      (agent-shell-crew-queue-create other "human" :title "O" :owner "owner@x")
+      (with-current-buffer (find-file-noselect (agent-shell-crew-queue-file other))
+        (goto-char (point-max)) (insert "unsaved\n"))
+      (agent-shell-crew-queue-claim root "owner@x" id)
+      (agent-shell-crew-queue-park root "owner@x" id "Q?")
+      (should (= (length (agent-shell-crew-parked)) 1)))))
+
+(ert-deftest crew-queue-hook-error-does-not-fail-write ()
+  "Finding 2: a failing changed-hook must not turn a saved write into an error."
+  (crew-test--with-project root
+    (let* ((agent-shell-crew-changed-hook (list (lambda (&rest _) (error "Hook broke"))))
+           (id (agent-shell-crew-queue-create root "human" :title "T" :owner "owner@x")))
+      (should (stringp id))
+      (should (= (length (agent-shell-crew-queue-list root)) 1)))))
+
+(ert-deftest crew-queue-same-folder-name-separate-queues ()
+  "Finding 6: two projects named app must not share a queue."
+  (let* ((agent-shell-crew-directory (file-name-as-directory (make-temp-file "crew-q" t)))
+         (a (let ((d (expand-file-name "app/" (make-temp-file "crew-a" t)))) (make-directory d t) d))
+         (b (let ((d (expand-file-name "app/" (make-temp-file "crew-b" t)))) (make-directory d t) d)))
+    (unwind-protect
+        (progn
+          (agent-shell-crew-queue-create a "human" :title "in A" :owner "owner@app")
+          (agent-shell-crew-queue-create b "human" :title "in B" :owner "owner@app")
+          (should-not (equal (agent-shell-crew-queue-file a) (agent-shell-crew-queue-file b)))
+          (should (equal (mapcar (lambda (i) (plist-get i :title)) (agent-shell-crew-queue-list a))
+                         '("in A"))))
+      (dolist (buf (buffer-list))
+        (when (and (buffer-file-name buf)
+                   (string-prefix-p agent-shell-crew-directory (buffer-file-name buf)))
+          (kill-buffer buf))))))
+
+(ert-deftest crew-queue-active-region-changes-one-item ()
+  "Finding 7: an active region must not widen a state change."
+  (crew-test--with-project root
+    (let ((a (agent-shell-crew-queue-create root "human" :title "A" :owner "owner@x"))
+          (b (agent-shell-crew-queue-create root "human" :title "B" :owner "owner@x")))
+      (with-current-buffer (find-file-noselect (agent-shell-crew-queue-file root))
+        (setq-local org-loop-over-headlines-in-active-region t)
+        (transient-mark-mode 1)
+        (push-mark (point-min) t t)
+        (goto-char (point-max))
+        (should (region-active-p))
+        (agent-shell-crew-queue-claim root "owner@x" a))
+      (should (equal (plist-get (agent-shell-crew-queue-get root b) :state) "PENDING")))))
+
 (provide 'agent-shell-crew-queue-test)
 ;;; agent-shell-crew-queue-test.el ends here
