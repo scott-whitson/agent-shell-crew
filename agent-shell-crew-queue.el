@@ -146,8 +146,13 @@ TITLE and OWNER are required.  BRIEF, EVIDENCE, REF and PARENT are
 optional strings."
   (when (agent-shell-crew--blank-p title) (agent-shell-crew--fail "An item needs a title"))
   (when (agent-shell-crew--blank-p owner) (agent-shell-crew--fail "An item needs an owner"))
-  (let ((id (agent-shell-crew--new-id)))
+  (let (id)
     (agent-shell-crew--with-queue root
+      ;; The suffix is random, so a clash within one second is possible;
+      ;; this buffer is the only writer, so checking here makes it unique.
+      (setq id (agent-shell-crew--new-id))
+      (while (org-find-property "CREW_ID" id)
+        (setq id (agent-shell-crew--new-id)))
       (goto-char (point-max))
       (unless (bolp) (insert "\n"))
       (insert (format "* PENDING %s :crew:\n" (agent-shell-crew--clean-line title)))
