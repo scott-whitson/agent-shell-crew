@@ -324,6 +324,29 @@ Only the owner or the human may; the change is logged with the old text."
     (agent-shell-crew--log "status by %s: %s" actor (agent-shell-crew--clean-line status))
     (agent-shell-crew--put-outcome status nil)))
 
+(defun agent-shell-crew-queue-stage (root actor id stage evidence &optional status)
+  "ACTOR records that item ID in ROOT's queue has reached STAGE.
+EVIDENCE says how it is known; STATUS is as for
+`agent-shell-crew--put-outcome'.  Only the owner or the human may: a
+member records what it did, the human records what they saw.  Works in
+any state, since stages such as \"deployed\" come after an item closes."
+  (when (agent-shell-crew--blank-p stage) (agent-shell-crew--fail "A stage needs a name"))
+  (when (agent-shell-crew--blank-p evidence) (agent-shell-crew--fail "A stage needs evidence"))
+  (agent-shell-crew--mutate root id 'stage
+    (unless (equal actor "human") (agent-shell-crew--require-owner actor))
+    (agent-shell-crew--log "stage %s by %s: %s" (agent-shell-crew--clean-line stage) actor
+                           (agent-shell-crew--clean-line evidence))
+    (agent-shell-crew--put-outcome status nil)))
+
+(defun agent-shell-crew-queue-set-branch (root actor id branch)
+  "ACTOR records BRANCH as the git branch of item ID in ROOT's queue.
+Only the owner or the human may."
+  (when (agent-shell-crew--blank-p branch) (agent-shell-crew--fail "A branch needs a name"))
+  (agent-shell-crew--mutate root id 'branch
+    (unless (equal actor "human") (agent-shell-crew--require-owner actor))
+    (agent-shell-crew--log "branch by %s: %s" actor (agent-shell-crew--clean-line branch))
+    (agent-shell-crew--put-outcome nil branch)))
+
 (defun agent-shell-crew-queue-park (root actor id question &optional evidence status)
   "ACTOR parks item ID in ROOT's queue on the human with QUESTION.
 EVIDENCE, when non-blank, replaces the item's evidence.  STATUS is as for

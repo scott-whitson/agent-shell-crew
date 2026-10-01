@@ -41,6 +41,10 @@ TOOLS = [
     _tool("crew_handoff", "Close your item as HANDED and open a new item for `to`.",
           {"id": S, "to": S, "summary": S, "brief": S, "status": STATUS, "branch": BRANCH},
           ["id", "to", "summary"]),
+    _tool("crew_stage", "Record that your item's work has reached a stage the crew tracks after "
+          "it closes, such as `deployed` or `live-checked`, with the evidence. Works on a "
+          "closed item.", {"id": S, "stage": S, "evidence": S, "status": STATUS},
+          ["id", "stage", "evidence"]),
     _tool("crew_park", "Park your item on the human with a question. Write options inline as "
           "`(1) ...; (2) ...` and point `evidence` at a file the human should read.",
           {"id": S, "question": S, "evidence": S, "status": STATUS}, ["id", "question"]),

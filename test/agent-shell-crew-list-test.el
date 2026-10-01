@@ -208,6 +208,23 @@
         (agent-shell-crew--cached-items root)
         (should (= reads 1))))))
 
+;;; Stages waiting on the human
+
+(ert-deftest crew-health-idle-with-merged-work-at-your-stage-is-attention ()
+  "Grey would say nothing is pending; five merged packages awaiting a deploy is."
+  (crew-list-test--with root
+    (agent-shell-crew-start root '("owner"))
+    (let ((agent-shell-crew-waiting-function (lambda (_) '(("37" . "deployed") ("40" . "deployed")))))
+      (should (equal (agent-shell-crew-health root)
+                     '(attention . "2 waiting on you at a stage: 37 deployed, 40 deployed"))))))
+
+(ert-deftest crew-health-a-working-crew-stays-green-despite-stages ()
+  (crew-list-test--with root
+    (agent-shell-crew-start root '("owner"))
+    (crew-list-test--status root "owner@my-app" 'busy)
+    (let ((agent-shell-crew-waiting-function (lambda (_) '(("37" . "deployed")))))
+      (should (eq (car (agent-shell-crew-health root)) 'working)))))
+
 ;;; Stuck members
 
 (defun crew-list-test--quiet (root member minutes &optional held)

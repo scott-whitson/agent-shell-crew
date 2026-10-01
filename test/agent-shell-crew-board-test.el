@@ -147,6 +147,103 @@
       (should (equal (agent-shell-crew-board--trunk root) "trunk")))
     (should (equal (agent-shell-crew-board--trunk root) "main"))))
 
+;;; Stages
+
+(defun crew-board-test--merged-piece (root ref)
+  "Create piece REF on branch crew/REF, merged --no-ff into main; return its item id."
+  (crew-board-test--git root "switch" "-q" "-c" (concat "crew/" ref))
+  (crew-board-test--git root "commit" "-q" "--allow-empty" "-m" ref)
+  (crew-board-test--git root "switch" "-q" "main")
+  (crew-board-test--git root "merge" "-q" "--no-ff" "-m" (format "Merge branch 'crew/%s'" ref)
+                        (concat "crew/" ref))
+  (agent-shell-crew-queue-create root "human" :title ref :owner "owner@my-app" :ref ref
+                                 :branch (concat "crew/" ref)))
+
+(ert-deftest crew-board-a-recorded-stage-shows-reached ()
+  (crew-board-test--with root
+    (crew-board-test--repo root)
+    (let* ((agent-shell-crew-stages '((:name "live-checked")))
+           (id (crew-board-test--merged-piece root "40")))
+      (should (equal (cdr (agent-shell-crew-board--progress
+                           root (car (agent-shell-crew-board--rows root)) "main"
+                           agent-shell-crew-stages))
+                     '(no)))
+      (agent-shell-crew-queue-stage root "human" id "live-checked" "card used the lesson on the test tenant")
+      (should (equal (agent-shell-crew-board--progress
+                      root (car (agent-shell-crew-board--rows root)) "main" agent-shell-crew-stages)
+                     '(yes yes))))))
+
+(ert-deftest crew-board-a-stage-records-on-a-closed-item-by-owner-or-human ()
+  (crew-board-test--with root
+    (let ((id (agent-shell-crew-queue-create root "human" :title "T" :owner "owner@my-app")))
+      (agent-shell-crew-queue-claim root "owner@my-app" id)
+      (agent-shell-crew-queue-done root "owner@my-app" id "built")
+      (agent-shell-crew-queue-stage root "owner@my-app" id "deployed" "playground 1a2b")
+      (should-error (agent-shell-crew-queue-stage root "check@my-app" id "deployed" "x")
+                    :type 'agent-shell-crew-error)
+      (should-error (agent-shell-crew-queue-stage root "human" id "deployed" "  ")
+                    :type 'agent-shell-crew-error))))
+
+(ert-deftest crew-board-a-check-stage-compares-commits-in-the-background ()
+  "The check names a commit; a piece is there when its merge is an ancestor."
+  (crew-board-test--with root
+    (crew-board-test--repo root)
+    (crew-board-test--merged-piece root "38")
+    (let ((deployed (agent-shell-crew-board--git-out root "rev-parse" "HEAD")))
+      (crew-board-test--merged-piece root "40")
+      (let* ((agent-shell-crew-board--checks nil)
+             (agent-shell-crew-board--running nil)
+             (stages `((:name "deployed" :check ,(format "echo %s" deployed))))
+             (agent-shell-crew-stages stages)
+             (progress (lambda (ref)
+                         (cdr (agent-shell-crew-board--progress
+                               root (seq-find (lambda (r) (equal (plist-get r :ref) ref))
+                                              (agent-shell-crew-board--rows root))
+                               "main" stages)))))
+        (should (equal (funcall progress "38") '(pending)))
+        (with-timeout (10 (ert-fail "the check never answered"))
+          (while agent-shell-crew-board--running (accept-process-output nil 0.05)))
+        (should (equal (funcall progress "38") '(yes)))
+        (should (equal (funcall progress "40") '(no)))))))
+
+(ert-deftest crew-board-merged-work-at-a-human-stage-waits-on-the-human ()
+  (crew-board-test--with root
+    (crew-board-test--repo root)
+    (let ((agent-shell-crew-stages '((:name "deployed") (:name "accepted"))))
+      (crew-board-test--merged-piece root "37")
+      (let ((id (crew-board-test--merged-piece root "39")))
+        (agent-shell-crew-queue-stage root "human" id "deployed" "prod d3457"))
+      (should (equal (sort (mapcar (lambda (w) (format "%s %s" (car w) (cdr w)))
+                                   (cdr (cdr (progn (agent-shell-crew-board--recompute root)
+                                                    (assoc root agent-shell-crew-board--waiting)))))
+                           #'string<)
+                     '("37 deployed" "39 accepted"))))))
+
+(ert-deftest crew-board-a-stage-a-member-owns-does-not-wait-on-the-human ()
+  (crew-board-test--with root
+    (crew-board-test--repo root)
+    (let ((agent-shell-crew-stages '((:name "deployed" :owner "gate@my-app"))))
+      (crew-board-test--merged-piece root "37")
+      (agent-shell-crew-board--recompute root)
+      (should-not (cddr (assoc root agent-shell-crew-board--waiting))))))
+
+(ert-deftest crew-board-hides-closed-rows-without-a-ref-until-asked ()
+  (crew-board-test--with root
+    (crew-board-test--repo root)
+    (let ((slate (agent-shell-crew-queue-create root "human" :title "Slate" :owner "lead@my-app")))
+      (agent-shell-crew-queue-claim root "lead@my-app" slate)
+      (agent-shell-crew-queue-done root "lead@my-app" slate "approved"))
+    (agent-shell-crew-queue-create root "human" :title "Real work" :owner "owner@my-app" :ref "41")
+    (with-current-buffer (agent-shell-crew-board root)
+      (should (string-match-p "Real work" (buffer-string)))
+      (should-not (string-match-p "Slate" (buffer-string)))
+      (agent-shell-crew-board-toggle-all)
+      (should (string-match-p "Slate" (buffer-string))))))
+
+(ert-deftest crew-board-columns-include-each-stage ()
+  (should (equal (mapcar #'car (agent-shell-crew-board--format '((:name "deployed") (:name "accepted"))))
+                 '("Ref" "State" "Merged" "deployed" "accepted" "Title" "Status"))))
+
 ;;; Buffer
 
 (ert-deftest crew-board-buffer-renders-a-row-with-its-sentence ()

@@ -216,6 +216,10 @@ Returns the list buffer."
 (defconst agent-shell-crew--health-rank '(stalled attention working idle)
   "Health states, worst first.")
 
+(defvar agent-shell-crew-waiting-function nil
+  "Function of ROOT returning the (REF . STAGE) pairs waiting on the human.
+Set by `agent-shell-crew-board' when it loads; nil means no stages.")
+
 (defun agent-shell-crew-health (root &optional all-items)
   "Return the health of ROOT's crew as (STATE . REASON).
 STATE is, worst first:
@@ -223,7 +227,8 @@ STATE is, worst first:
               an open item's owner is not running, or there is open
               work and no member is working;
   `attention' something waits on the human: a parked item, an item the
-              human owns, or a member blocked on a prompt;
+              human owns, a member blocked on a prompt, or -- when no
+              member is working -- merged work at a stage the human owns;
   `working'   at least one member is working and nothing above holds;
   `idle'      members are running and nothing is open.
 REASON is one line saying why.  ALL-ITEMS is as for
@@ -251,7 +256,9 @@ REASON is one line saying why.  ALL-ITEMS is as for
                                   (equal (plist-get r :member) "human")))
                             open))
          (crew-work (seq-remove (lambda (r) (equal (plist-get r :member) "human")) open))
-         (title (lambda (r) (plist-get (plist-get r :item) :title))))
+         (title (lambda (r) (plist-get (plist-get r :item) :title)))
+         (at-stage (and agent-shell-crew-waiting-function
+                        (ignore-errors (funcall agent-shell-crew-waiting-function root)))))
     (cond
      (stuck
       (let* ((name (plist-get (car stuck) :member))
@@ -270,6 +277,11 @@ REASON is one line saying why.  ALL-ITEMS is as for
              (delq nil (list (and yours (format "%d waiting on you" (length yours)))
                              (and blocked (format "%s blocked" (string-join blocked ", ")))))
              "; ")))
+     ((and at-stage (not working))
+      (cons 'attention
+            (format "%d waiting on you at a stage: %s"
+                    (length at-stage)
+                    (mapconcat (lambda (w) (format "%s %s" (car w) (cdr w))) at-stage ", "))))
      (working
       (cons 'working (format "%s working" (string-join working ", "))))
      (t (cons 'idle "running, nothing open")))))

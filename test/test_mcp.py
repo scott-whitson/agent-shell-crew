@@ -57,7 +57,7 @@ class McpTest(unittest.TestCase):
         self.assertEqual(out[0]["result"]["protocolVersion"], "2025-06-18")
         names = {t["name"] for t in out[1]["result"]["tools"]}
         self.assertEqual(names, {"crew_mine", "crew_list", "crew_show", "crew_create", "crew_claim",
-                                 "crew_note", "crew_handoff", "crew_park", "crew_done"})
+                                 "crew_note", "crew_handoff", "crew_stage", "crew_park", "crew_done"})
 
     def test_call_forwards_with_identity_from_environment(self):
         out = self.run_session([{"jsonrpc": "2.0", "id": 3, "method": "tools/call",
