@@ -80,8 +80,11 @@ A member's reason runs to a paragraph; a board row has room for one."
     text))
 
 (defun agent-shell-crew-board--event-text (item)
-  "The first sentence of ITEM's latest log line, without its time and author."
-  (when-let* ((line (car (last (plist-get item :log)))))
+  "The first sentence of ITEM's latest log line, without its time and author.
+Bookkeeping lines -- a branch or status being set -- say nothing about
+the work, so the latest line that is not one of those."
+  (when-let* ((line (seq-find (lambda (l) (not (string-match-p "\\] \\(?:branch\\|status\\) by " l)))
+                              (reverse (plist-get item :log)))))
     (agent-shell-crew-board--first-sentence
      (string-trim
       (replace-regexp-in-string "\\`\\[[^]]*\\] \\(?:[^:]*: \\)?" "" line)))))
@@ -208,7 +211,8 @@ ITEMS, when given, is ROOT's queue as already read."
 (defun agent-shell-crew-board--progress (root row trunk stages)
   "ROW's progress in ROOT: (MERGED . STAGE-STATES), one symbol per stage.
 MERGED is `yes', `no', `unknown' or `none' (no branch).  Each stage is
-`yes', `no', `pending' (its check has not answered) or `unknown'."
+`yes', `no', `pending' (its check has not answered), `unknown', or
+`none' when the piece records no branch and nothing was recorded."
   (let* ((branch (plist-get row :branch))
          (merged (if branch (agent-shell-crew-board--merged-commit root branch trunk) '(none)))
          (sha (cdr merged)))
@@ -217,6 +221,7 @@ MERGED is `yes', `no', `unknown' or `none' (no branch).  Each stage is
            (lambda (stage)
              (cond
               ((member (plist-get stage :name) (plist-get row :recorded)) 'yes)
+              ((eq (car merged) 'none) 'none)
               ((not (plist-get stage :check)) 'no)
               ((not sha) 'unknown)
               (t (let ((commit (agent-shell-crew-board--check root stage)))

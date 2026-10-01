@@ -115,6 +115,24 @@
       (should (equal (plist-get (car (agent-shell-crew-board--rows root)) :fallback)
                      "Merged and pushed, gate PASS 12492p.")))))
 
+(ert-deftest crew-board-bookkeeping-is-not-the-latest-event ()
+  (crew-board-test--with root
+    (let ((id (agent-shell-crew-queue-create root "human" :title "T" :owner "owner@my-app")))
+      (agent-shell-crew-queue-claim root "owner@my-app" id)
+      (agent-shell-crew-queue-done root "owner@my-app" id "gated in bundle 2200")
+      (agent-shell-crew-queue-set-branch root "human" id "crew/t")
+      (should (equal (plist-get (car (agent-shell-crew-board--rows root)) :fallback)
+                     "gated in bundle 2200")))))
+
+(ert-deftest crew-board-a-piece-without-a-branch-shows-no-stage-marks ()
+  (crew-board-test--with root
+    (crew-board-test--repo root)
+    (let ((stages '((:name "deployed" :check "echo x") (:name "accepted"))))
+      (agent-shell-crew-queue-create root "human" :title "T" :owner "owner@my-app" :ref "29")
+      (should (equal (agent-shell-crew-board--progress
+                      root (car (agent-shell-crew-board--rows root)) "main" stages)
+                     '(none none none))))))
+
 ;;; Merged
 
 (ert-deftest crew-board-merged-yes-no-and-unknown ()
