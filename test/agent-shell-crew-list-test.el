@@ -127,4 +127,85 @@
         (should-not (member "lead@my-app" members))))))
 
 (provide 'agent-shell-crew-list-test)
+;;; Health
+
+(defun crew-list-test--status (root member status)
+  "Set MEMBER of ROOT's crew to STATUS in the stub."
+  (with-current-buffer (agent-shell-crew--member-buffer member root)
+    (setq agent-shell-test--status status)))
+
+(ert-deftest crew-health-working-when-a-member-is-busy-and-nothing-is-stuck ()
+  (crew-list-test--with root
+    (agent-shell-crew-start root '("owner" "check"))
+    (crew-list-test--status root "owner@my-app" 'busy)
+    (let ((id (agent-shell-crew-queue-create root "human" :title "Build it" :owner "owner@my-app")))
+      (agent-shell-crew-queue-claim root "owner@my-app" id))
+    (should (eq (car (agent-shell-crew-health root)) 'working))
+    (should (string-match-p "owner@my-app working" (cdr (agent-shell-crew-health root))))))
+
+(ert-deftest crew-health-idle-when-running-with-nothing-open ()
+  (crew-list-test--with root
+    (agent-shell-crew-start root '("owner"))
+    (should (eq (car (agent-shell-crew-health root)) 'idle))))
+
+(ert-deftest crew-health-attention-for-a-parked-item-even-while-working ()
+  (crew-list-test--with root
+    (agent-shell-crew-start root '("owner"))
+    (crew-list-test--status root "owner@my-app" 'busy)
+    (let ((id (agent-shell-crew-queue-create root "human" :title "Pick" :owner "owner@my-app")))
+      (agent-shell-crew-queue-claim root "owner@my-app" id)
+      (agent-shell-crew-queue-park root "owner@my-app" id "Which? (1) a; (2) b"))
+    (should (equal (agent-shell-crew-health root) '(attention . "1 waiting on you")))))
+
+(ert-deftest crew-health-attention-for-a-blocked-member ()
+  (crew-list-test--with root
+    (agent-shell-crew-start root '("owner"))
+    (crew-list-test--status root "owner@my-app" 'blocked)
+    (should (equal (agent-shell-crew-health root) '(attention . "owner@my-app blocked")))))
+
+(ert-deftest crew-health-stalled-when-an-owner-is-not-running ()
+  (crew-list-test--with root
+    (agent-shell-crew-start root '("owner"))
+    (crew-list-test--status root "owner@my-app" 'busy)
+    (agent-shell-crew-queue-create root "human" :title "Check it" :owner "check@my-app")
+    (let ((health (agent-shell-crew-health root)))
+      (should (eq (car health) 'stalled))
+      (should (string-match-p "Check it is owned by check@my-app" (cdr health))))))
+
+(ert-deftest crew-health-stalled-when-work-is-open-and-nobody-works ()
+  (crew-list-test--with root
+    (agent-shell-crew-start root '("owner"))
+    (agent-shell-crew-queue-create root "human" :title "Build it" :owner "owner@my-app")
+    (should (equal (agent-shell-crew-health root)
+                   '(stalled . "1 open item and no member is working")))))
+
+(ert-deftest crew-status-segment-nil-without-a-running-crew ()
+  (crew-list-test--with root
+    (ignore root)
+    (should-not (agent-shell-crew-status-segment))))
+
+(ert-deftest crew-status-segment-is-a-dot-in-the-health-face ()
+  (crew-list-test--with root
+    (setq agent-shell-crew--health-cache nil)
+    (agent-shell-crew-start root '("owner"))
+    (crew-list-test--status root "owner@my-app" 'busy)
+    (let ((dot (agent-shell-crew-status-segment)))
+      (should (equal (substring-no-properties dot) "●"))
+      (should (eq (get-text-property 0 'face dot) 'agent-shell-crew-health-working))
+      (should (string-match-p "crew my-app: owner@my-app working"
+                              (get-text-property 0 'help-echo dot))))))
+
+(ert-deftest crew-status-segment-rereads-the-queue-only-when-it-changes ()
+  (crew-list-test--with root
+    (setq agent-shell-crew--health-cache nil)
+    (agent-shell-crew-start root '("owner"))
+    (agent-shell-crew-queue-create root "human" :title "Build it" :owner "owner@my-app")
+    (let ((reads 0)
+          (real (symbol-function 'agent-shell-crew-queue-list)))
+      (cl-letf (((symbol-function 'agent-shell-crew-queue-list)
+                 (lambda (&rest args) (cl-incf reads) (apply real args))))
+        (agent-shell-crew--cached-items root)
+        (agent-shell-crew--cached-items root)
+        (should (= reads 1))))))
+
 ;;; agent-shell-crew-list-test.el ends here

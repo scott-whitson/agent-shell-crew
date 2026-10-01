@@ -62,12 +62,14 @@
   "Non-nil when ITEM still needs someone."
   (member (plist-get item :state) '("PENDING" "ACTIVE" "PARKED")))
 
-(defun agent-shell-crew-list--rows (root)
+(defun agent-shell-crew-list--rows (root &optional all-items)
   "Return the rows for ROOT's crew as plists (:member :status :item).
 One row per open item, and one for each member who owns none; the
 human's items last.  Items owned by a name that is no longer a role are
-kept, so nothing open is hidden."
-  (let* ((items (seq-filter #'agent-shell-crew-list--open-p (agent-shell-crew-queue-list root)))
+kept, so nothing open is hidden.  ALL-ITEMS, when given, is ROOT's
+queue as already read, so a caller on a timer need not reread it."
+  (let* ((items (seq-filter #'agent-shell-crew-list--open-p
+                            (or all-items (agent-shell-crew-queue-list root))))
          (members (append (remove "human" (agent-shell-crew-members root)) (list "human")))
          rows)
     (dolist (member members)
@@ -189,6 +191,125 @@ Returns the list buffer."
 
 (add-hook 'agent-shell-crew-changed-hook #'agent-shell-crew-list--refresh-root)
 (add-hook 'agent-shell-crew-session-changed-hook #'agent-shell-crew-list--refresh-root)
+
+;;; Health: one dot for the whole crew
+
+(defface agent-shell-crew-health-working '((t :foreground "#4caf50"))
+  "Face of the health dot when the crew is working and nothing is stuck."
+  :group 'agent-shell-crew)
+
+(defface agent-shell-crew-health-attention '((t :inherit warning))
+  "Face of the health dot when something waits on you."
+  :group 'agent-shell-crew)
+
+(defface agent-shell-crew-health-stalled '((t :inherit error))
+  "Face of the health dot when open work is not moving."
+  :group 'agent-shell-crew)
+
+(defface agent-shell-crew-health-idle '((t :inherit shadow))
+  "Face of the health dot when the crew is running and has nothing open."
+  :group 'agent-shell-crew)
+
+(defconst agent-shell-crew--health-rank '(stalled attention working idle)
+  "Health states, worst first.")
+
+(defun agent-shell-crew-health (root &optional all-items)
+  "Return the health of ROOT's crew as (STATE . REASON).
+STATE is, worst first:
+  `stalled'   an open item's owner is not running, or there is open
+              work and no member is working;
+  `attention' something waits on the human: a parked item, an item the
+              human owns, or a member blocked on a prompt;
+  `working'   at least one member is working and nothing above holds;
+  `idle'      members are running and nothing is open.
+REASON is one line saying why.  ALL-ITEMS is as for
+`agent-shell-crew-list--rows'."
+  (let* ((rows (agent-shell-crew-list--rows root all-items))
+         (open (seq-filter (lambda (r) (plist-get r :item)) rows))
+         (member-rows (seq-remove (lambda (r) (equal (plist-get r :member) "human")) rows))
+         (status-of (lambda (name)
+                      (plist-get (seq-find (lambda (r) (equal (plist-get r :member) name)) member-rows)
+                                 :status)))
+         (working (delete-dups (mapcar (lambda (r) (plist-get r :member))
+                                       (seq-filter (lambda (r) (eq (plist-get r :status) 'working))
+                                                   member-rows))))
+         (blocked (delete-dups (mapcar (lambda (r) (plist-get r :member))
+                                       (seq-filter (lambda (r) (eq (plist-get r :status) 'blocked))
+                                                   member-rows))))
+         (orphaned (seq-filter (lambda (r)
+                                 (let ((owner (plist-get r :member)))
+                                   (and (not (equal owner "human"))
+                                        (memq (funcall status-of owner) '(not-running nil)))))
+                               open))
+         (yours (seq-filter (lambda (r)
+                              (or (equal (plist-get (plist-get r :item) :state) "PARKED")
+                                  (equal (plist-get r :member) "human")))
+                            open))
+         (crew-work (seq-remove (lambda (r) (equal (plist-get r :member) "human")) open))
+         (title (lambda (r) (plist-get (plist-get r :item) :title))))
+    (cond
+     (orphaned
+      (cons 'stalled (format "%s is owned by %s, which is not running"
+                             (funcall title (car orphaned)) (plist-get (car orphaned) :member))))
+     ((and crew-work (not working) (not blocked) (not yours))
+      (cons 'stalled (format "%d open item%s and no member is working"
+                             (length crew-work) (if (cdr crew-work) "s" ""))))
+     ((or yours blocked)
+      (cons 'attention
+            (string-join
+             (delq nil (list (and yours (format "%d waiting on you" (length yours)))
+                             (and blocked (format "%s blocked" (string-join blocked ", ")))))
+             "; ")))
+     (working
+      (cons 'working (format "%s working" (string-join working ", "))))
+     (t (cons 'idle "running, nothing open")))))
+
+(defvar agent-shell-crew--health-cache nil
+  "Alist of (ROOT MTIME . ITEMS): each queue as last read, by file time.")
+
+(defun agent-shell-crew--cached-items (root)
+  "ROOT's queue items, reread only when its file has changed."
+  (let* ((file (agent-shell-crew-queue-file root))
+         (mtime (file-attribute-modification-time (file-attributes file)))
+         (hit (assoc root agent-shell-crew--health-cache)))
+    (if (and hit (equal (cadr hit) mtime))
+        (cddr hit)
+      (let ((items (and mtime (agent-shell-crew-queue-list root))))
+        (setf (alist-get root agent-shell-crew--health-cache nil nil #'equal)
+              (cons mtime items))
+        items))))
+
+;;;###autoload
+(defun agent-shell-crew-status-segment ()
+  "A dot for every running crew's worst health, or nil when none runs.
+For a status bar: the queue is reread only when its file changes, so
+calling this every few seconds costs a stat per crew.  Hovering names
+the reason; clicking opens the crew list.  Never signals."
+  (condition-case nil
+      (when-let* ((roots (agent-shell-crew--running-roots)))
+        (let* ((healths (mapcar (lambda (root)
+                                  (cons root (agent-shell-crew-health
+                                              root (agent-shell-crew--cached-items root))))
+                                roots))
+               (worst (car (seq-sort-by (lambda (h) (seq-position agent-shell-crew--health-rank
+                                                                   (cadr h)))
+                                        #'< healths)))
+               (state (cadr worst))
+               (map (make-sparse-keymap)))
+          (define-key map [tab-bar mouse-1]
+                      (lambda () (interactive) (agent-shell-crew-list (car worst))))
+          (define-key map [mode-line mouse-1]
+                      (lambda () (interactive) (agent-shell-crew-list (car worst))))
+          (propertize "●"
+                      'face (intern (format "agent-shell-crew-health-%s" state))
+                      'help-echo (mapconcat (lambda (h)
+                                              (format "crew %s: %s"
+                                                      (agent-shell-crew-project-name (car h))
+                                                      (cddr h)))
+                                            healths "\n")
+                      'local-map map
+                      'mouse-face 'highlight)))
+    (error nil)))
 
 (provide 'agent-shell-crew-list)
 ;;; agent-shell-crew-list.el ends here
