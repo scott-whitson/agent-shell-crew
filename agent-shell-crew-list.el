@@ -41,6 +41,7 @@
 (defconst agent-shell-crew-list--status-labels
   '((working "◐" "working")
     (blocked "◉" "blocked")
+    (stuck "◌" "stuck")
     (ready "●" "ready")
     (not-running "○" "not running"))
   "Icon and label for each member status.")
@@ -51,12 +52,14 @@
 (defun agent-shell-crew-list--member-status (member root)
   "Return MEMBER's status in ROOT's crew as a symbol."
   (let ((buffer (agent-shell-crew--member-buffer member root)))
-    (if (not buffer)
-        'not-running
+    (cond
+     ((not buffer) 'not-running)
+     ((agent-shell-crew--member-stuck buffer) 'stuck)
+     (t
       (pcase (condition-case nil (agent-shell-status :shell-buffer buffer) (error nil))
         ('busy 'working)
         ('blocked 'blocked)
-        (_ 'ready)))))
+        (_ 'ready))))))
 
 (defun agent-shell-crew-list--open-p (item)
   "Non-nil when ITEM still needs someone."
@@ -216,7 +219,8 @@ Returns the list buffer."
 (defun agent-shell-crew-health (root &optional all-items)
   "Return the health of ROOT's crew as (STATE . REASON).
 STATE is, worst first:
-  `stalled'   an open item's owner is not running, or there is open
+  `stalled'   a member is stuck (see `agent-shell-crew--member-stuck'),
+              an open item's owner is not running, or there is open
               work and no member is working;
   `attention' something waits on the human: a parked item, an item the
               human owns, or a member blocked on a prompt;
@@ -225,6 +229,7 @@ STATE is, worst first:
 REASON is one line saying why.  ALL-ITEMS is as for
 `agent-shell-crew-list--rows'."
   (let* ((rows (agent-shell-crew-list--rows root all-items))
+         (stuck (seq-filter (lambda (r) (eq (plist-get r :status) 'stuck)) rows))
          (open (seq-filter (lambda (r) (plist-get r :item)) rows))
          (member-rows (seq-remove (lambda (r) (equal (plist-get r :member) "human")) rows))
          (status-of (lambda (name)
@@ -248,6 +253,11 @@ REASON is one line saying why.  ALL-ITEMS is as for
          (crew-work (seq-remove (lambda (r) (equal (plist-get r :member) "human")) open))
          (title (lambda (r) (plist-get (plist-get r :item) :title))))
     (cond
+     (stuck
+      (let* ((name (plist-get (car stuck) :member))
+             (buffer (agent-shell-crew--member-buffer name root)))
+        (cons 'stalled (format "%s %s" name (or (and buffer (agent-shell-crew--member-stuck buffer))
+                                                 "is stuck")))))
      (orphaned
       (cons 'stalled (format "%s is owned by %s, which is not running"
                              (funcall title (car orphaned)) (plist-get (car orphaned) :member))))

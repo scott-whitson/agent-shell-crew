@@ -247,6 +247,74 @@ Held back while the session is starting up."
         (with-current-buffer buffer (setq agent-shell-crew--pending nil))
         (dolist (text texts) (agent-shell-crew--deliver buffer text))))))
 
+;;; Stuck members
+
+(defcustom agent-shell-crew-stall-minutes 10
+  "Minutes a member may read busy with no activity before it counts as stuck.
+A turn whose end never reaches the buffer leaves it busy forever, and every
+nudge sent to it waits behind that turn.  Seen 2026-09-30: a gate held two
+of the human's decisions for an hour behind a turn that had ended."
+  :type 'number
+  :group 'agent-shell-crew)
+
+(defun agent-shell-crew--member-stuck (buffer)
+  "Why the member session in BUFFER is stuck, or nil when it is not.
+Two ways: busy with no activity for `agent-shell-crew-stall-minutes', or
+idle with prompts still queued -- agent-shell pauses its queue after an
+interrupt, and nothing resumes it.  Never signals."
+  (condition-case nil
+      (with-current-buffer buffer
+        (let* ((state (bound-and-true-p agent-shell--state))
+               (last (map-elt state :last-activity-time))
+               (quiet (and last (/ (float-time (time-subtract nil last)) 60.0)))
+               (held (length (map-elt state :pending-prompts)))
+               (waiting (if (> held 0)
+                            (format " (%d message%s waiting)" held (if (= held 1) "" "s"))
+                          "")))
+          (cond
+           ((and (shell-maker-busy) quiet (>= quiet agent-shell-crew-stall-minutes))
+            (format "busy with no activity for %d min%s; interrupt it with C-c C-c"
+                    (round quiet) waiting))
+           ((and (not (shell-maker-busy)) (> held 0) quiet (>= quiet 1))
+            (format "idle with %d queued message%s that are not being sent; \
+M-x agent-shell-prompt-queue-resume in its buffer"
+                    held (if (= held 1) "" "s"))))))
+    (error nil)))
+
+(defvar agent-shell-crew--watch-timer nil
+  "The timer `agent-shell-crew-watch-mode' runs.")
+
+(defvar agent-shell-crew--warned nil
+  "Member buffers already warned about for their current stuck episode.")
+
+(defun agent-shell-crew--watch ()
+  "Warn once about each member that has become stuck."
+  (dolist (buffer (buffer-list))
+    (when (buffer-local-value 'agent-shell-crew--member buffer)
+      (let ((why (agent-shell-crew--member-stuck buffer)))
+        (cond
+         ((and why (not (memq buffer agent-shell-crew--warned)))
+          (push buffer agent-shell-crew--warned)
+          (display-warning 'agent-shell-crew
+                           (format "%s looks stuck: %s"
+                                   (buffer-local-value 'agent-shell-crew--member buffer) why)
+                           :warning))
+         ((not why)
+          (setq agent-shell-crew--warned (delq buffer agent-shell-crew--warned)))))))
+  (setq agent-shell-crew--warned (seq-filter #'buffer-live-p agent-shell-crew--warned)))
+
+;;;###autoload
+(define-minor-mode agent-shell-crew-watch-mode
+  "Check every crew member each minute, and warn once when one is stuck."
+  :global t
+  :group 'agent-shell-crew
+  (when agent-shell-crew--watch-timer
+    (cancel-timer agent-shell-crew--watch-timer)
+    (setq agent-shell-crew--watch-timer nil))
+  (when agent-shell-crew-watch-mode
+    (setq agent-shell-crew--watch-timer
+          (run-with-timer 60 60 #'agent-shell-crew--watch))))
+
 (defun agent-shell-crew--notify (member root text)
   "Tell crew MEMBER of the project at ROOT TEXT if its session is running."
   (when-let* ((buffer (agent-shell-crew--member-buffer member root)))

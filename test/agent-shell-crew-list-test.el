@@ -208,4 +208,59 @@
         (agent-shell-crew--cached-items root)
         (should (= reads 1))))))
 
+;;; Stuck members
+
+(defun crew-list-test--quiet (root member minutes &optional held)
+  "Make MEMBER of ROOT's crew quiet for MINUTES with HELD queued prompts."
+  (with-current-buffer (agent-shell-crew--member-buffer member root)
+    (setq-local agent-shell--state
+                (list (cons :last-activity-time (time-subtract nil (* 60 minutes)))
+                      (cons :pending-prompts held)))))
+
+(ert-deftest crew-stuck-when-busy-and-quiet-past-the-limit ()
+  "The gate on 2026-09-30: busy for an hour, two decisions held behind it."
+  (crew-list-test--with root
+    (agent-shell-crew-start root '("owner"))
+    (crew-list-test--status root "owner@my-app" 'busy)
+    (crew-list-test--quiet root "owner@my-app" 56 '("decision 1" "decision 2"))
+    (let ((agent-shell-test--busy t))
+      (should (member '("owner@my-app" stuck nil nil) (crew-list-test--rows root)))
+      (let ((health (agent-shell-crew-health root)))
+        (should (eq (car health) 'stalled))
+        (should (string-match-p "no activity for 56 min (2 messages waiting)" (cdr health)))))))
+
+(ert-deftest crew-not-stuck-when-busy-and-recently-active ()
+  (crew-list-test--with root
+    (agent-shell-crew-start root '("owner"))
+    (crew-list-test--status root "owner@my-app" 'busy)
+    (crew-list-test--quiet root "owner@my-app" 2)
+    (let ((agent-shell-test--busy t))
+      (should (eq (car (agent-shell-crew-health root)) 'working)))))
+
+(ert-deftest crew-stuck-when-idle-with-a-paused-queue ()
+  "After an interrupt agent-shell pauses its queue, and nothing resumes it."
+  (crew-list-test--with root
+    (agent-shell-crew-start root '("owner"))
+    (crew-list-test--quiet root "owner@my-app" 3 '("a" "b" "c"))
+    (let ((agent-shell-test--busy nil))
+      (should (string-match-p "3 queued messages that are not being sent"
+                              (cdr (agent-shell-crew-health root)))))))
+
+(ert-deftest crew-watch-warns-once-per-stuck-episode ()
+  (crew-list-test--with root
+    (agent-shell-crew-start root '("owner"))
+    (crew-list-test--quiet root "owner@my-app" 30)
+    (let ((agent-shell-test--busy t)
+          (agent-shell-crew--warned nil)
+          (warnings 0))
+      (cl-letf (((symbol-function 'display-warning) (lambda (&rest _) (cl-incf warnings))))
+        (agent-shell-crew--watch)
+        (agent-shell-crew--watch)
+        (should (= warnings 1))
+        (crew-list-test--quiet root "owner@my-app" 0)
+        (agent-shell-crew--watch)
+        (crew-list-test--quiet root "owner@my-app" 30)
+        (agent-shell-crew--watch)
+        (should (= warnings 2))))))
+
 ;;; agent-shell-crew-list-test.el ends here

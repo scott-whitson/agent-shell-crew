@@ -51,6 +51,18 @@
     (setq-local agent-shell--state (list (cons :agent-config (list (cons :mcp-servers '(x))))))
     (should (equal (map-nested-elt agent-shell--state '(:agent-config :mcp-servers)) '(x)))))
 
+(ert-deftest crew-api-stuck-detection-state-keys ()
+  "Stuck detection reads two internal state keys; guard them by name."
+  (let ((src (with-temp-buffer
+               (insert-file-contents (find-library-name "agent-shell"))
+               (buffer-string))))
+    (should (string-match-p ":last-activity-time" src))
+    (should (string-match-p ":pending-prompts"
+                            (concat src (with-temp-buffer
+                                          (insert-file-contents
+                                           (find-library-name "agent-shell-prompt-queue"))
+                                          (buffer-string)))))))
+
 (ert-deftest crew-api-buffer-name-format-is-a-function-slot ()
   "Crew names buffers by binding `agent-shell-buffer-name-format' to a function."
   (should (boundp 'agent-shell-buffer-name-format))
