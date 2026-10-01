@@ -173,11 +173,21 @@ never waits for it."
             (error (kill-buffer out) (agent-shell-crew-board--store key nil))))))
     (cdr hit)))
 
+(defun agent-shell-crew-board--all-items (root)
+  "ROOT's archived items, then its queue, each id once.
+An item in both -- an archive interrupted between its two writes -- is
+taken from the queue."
+  (let* ((queue (agent-shell-crew-queue-list root))
+         (ids (mapcar (lambda (i) (plist-get i :id)) queue)))
+    (append (seq-remove (lambda (i) (member (plist-get i :id) ids))
+                        (agent-shell-crew-archive-list root))
+            queue)))
+
 (defun agent-shell-crew-board--rows (root &optional items)
   "Return ROOT's board rows as plists, most recently created piece first.
 ITEMS, when given, is ROOT's queue as already read."
   (let ((groups nil) (order nil))
-    (dolist (item (or items (agent-shell-crew-queue-list root)))
+    (dolist (item (or items (agent-shell-crew-board--all-items root)))
       (let ((key (or (plist-get item :ref) (plist-get item :id))))
         (unless (assoc key groups) (push key order))
         (setf (alist-get key groups nil nil #'equal)

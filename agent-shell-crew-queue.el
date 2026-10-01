@@ -462,5 +462,90 @@ never breaks it."
                                     (agent-shell-crew--file-items file)))))
             (directory-files agent-shell-crew-directory t "\\.org\\'")))))
 
+;;; Archive
+
+(defcustom agent-shell-crew-archive-days 7
+  "Days a closed item stays in the queue before it is archived.
+See `agent-shell-crew-queue-archive'.  nil never archives."
+  :type '(choice (const :tag "Never" nil) number)
+  :group 'agent-shell-crew)
+
+(defun agent-shell-crew-archive-file (root)
+  "Return the archive file beside ROOT's queue file."
+  (concat (file-name-sans-extension (agent-shell-crew-queue-file root)) "-archive.org"))
+
+(defun agent-shell-crew-archive-list (root)
+  "Return the items archived from ROOT's queue, oldest first.
+nil when nothing has been archived."
+  (let ((file (agent-shell-crew-archive-file root)))
+    (and (file-readable-p file) (agent-shell-crew--file-items file))))
+
+(defun agent-shell-crew--item-last-time (item)
+  "The time of ITEM's latest log line, or nil."
+  (when-let* ((line (car (last (plist-get item :log))))
+              ((string-match "\\`\\[\\([^]]+\\)\\]" line)))
+    (ignore-errors (org-time-string-to-time (match-string 1 line)))))
+
+(defun agent-shell-crew--archivable (items days)
+  "The ids among ITEMS to archive.
+An item qualifies when it closed more than DAYS ago and no open item
+shares its ref."
+  (let* ((cutoff (time-subtract nil (* days 86400)))
+         (open-keys (delq nil (mapcar (lambda (i)
+                                        (and (member (plist-get i :state) '("PENDING" "ACTIVE" "PARKED"))
+                                             (or (plist-get i :ref) (plist-get i :id))))
+                                      items))))
+    (delq nil
+          (mapcar (lambda (i)
+                    (let ((time (agent-shell-crew--item-last-time i)))
+                      (and (member (plist-get i :state) '("DONE" "HANDED" "CANCELED"))
+                           time (time-less-p time cutoff)
+                           (not (member (or (plist-get i :ref) (plist-get i :id)) open-keys))
+                           (plist-get i :id))))
+                  items))))
+
+(defun agent-shell-crew-queue-archive (root &optional days)
+  "Move ROOT's items closed more than DAYS ago into its archive file.
+DAYS defaults to `agent-shell-crew-archive-days'.  An item whose ref still
+has open work stays, so a hand-off chain in progress keeps its history.
+The archive is written before the queue is cut: a failure between the two
+leaves an item in both files, never in neither.  Returns how many moved."
+  (let ((days (or days agent-shell-crew-archive-days)))
+    (if (not days)
+        0
+      (let* ((ids (agent-shell-crew--archivable (agent-shell-crew-queue-list root) days))
+             (texts (when ids
+                      (agent-shell-crew--with-queue root
+                        (mapcar (lambda (id)
+                                  (agent-shell-crew--goto id)
+                                  (buffer-substring-no-properties
+                                   (point) (save-excursion (org-end-of-subtree t t) (point))))
+                                ids)))))
+        (when ids
+          (let ((file (agent-shell-crew-archive-file root)))
+            (with-current-buffer (let ((find-file-hook nil)) (find-file-noselect file t))
+              (agent-shell-crew--sync-with-disk)
+              (when (buffer-modified-p)
+                (agent-shell-crew--fail "%s has unsaved edits; save or revert it first" file))
+              (save-restriction
+                (widen)
+                (when (= (buffer-size) 0)
+                  (insert (format "#+TITLE: crew archive: %s\n#+CREW_ROOT: %s\n%s\n\n"
+                                  (agent-shell-crew-project-name root)
+                                  (file-name-as-directory (expand-file-name root))
+                                  agent-shell-crew--todo-line)))
+                (goto-char (point-max))
+                (unless (bolp) (insert "\n"))
+                (dolist (text texts)
+                  (insert text)
+                  (unless (bolp) (insert "\n"))))
+              (let ((save-silently t)) (save-buffer))))
+          (agent-shell-crew--with-queue root
+            (dolist (id ids)
+              (agent-shell-crew--goto id)
+              (delete-region (point) (save-excursion (org-end-of-subtree t t) (point)))))
+          (agent-shell-crew--changed root nil 'archive))
+        (length ids)))))
+
 (provide 'agent-shell-crew-queue)
 ;;; agent-shell-crew-queue.el ends here

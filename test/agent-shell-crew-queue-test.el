@@ -323,4 +323,61 @@
       (should (equal (plist-get (agent-shell-crew-queue-get root b) :state) "PENDING")))))
 
 (provide 'agent-shell-crew-queue-test)
+;;; Archive
+
+(defun crew-test--age (root id days)
+  "Back-date every log line of item ID in ROOT's queue by DAYS."
+  (agent-shell-crew--with-queue root
+    (agent-shell-crew--goto id)
+    (let ((end (save-excursion (org-end-of-subtree t t) (point)))
+          (stamp (format-time-string "[%Y-%m-%d %a %H:%M]" (time-subtract nil (* days 86400)))))
+      (while (re-search-forward "^- \\[[^]]+\\]" end t)
+        (replace-match (concat "- " stamp) t t)))))
+
+(defun crew-test--closed (root title &optional ref days)
+  "A DONE item TITLE in ROOT's queue, closed DAYS ago; return its id."
+  (let ((id (agent-shell-crew-queue-create root "human" :title title :owner "owner@x" :ref ref)))
+    (agent-shell-crew-queue-claim root "owner@x" id)
+    (agent-shell-crew-queue-done root "owner@x" id "done")
+    (when days (crew-test--age root id days))
+    id))
+
+(ert-deftest crew-queue-archive-moves-long-closed-items-and-keeps-them ()
+  (crew-test--with-project root
+    (let ((old (crew-test--closed root "Old" nil 10))
+          (new (crew-test--closed root "New" nil 1))
+          (open (agent-shell-crew-queue-create root "human" :title "Open" :owner "owner@x")))
+      (should (= (agent-shell-crew-queue-archive root 7) 1))
+      (should (equal (mapcar (lambda (i) (plist-get i :id)) (agent-shell-crew-queue-list root))
+                     (list new open)))
+      (let ((archived (agent-shell-crew-archive-list root)))
+        (should (equal (mapcar (lambda (i) (plist-get i :id)) archived) (list old)))
+        (should (equal (plist-get (car archived) :state) "DONE"))
+        (should (plist-get (car archived) :log)))
+      (should (= (agent-shell-crew-queue-archive root 7) 0) ))))
+
+(ert-deftest crew-queue-archive-keeps-a-chain-with-open-work ()
+  "A hand-off chain still in progress keeps its earlier items in the queue."
+  (crew-test--with-project root
+    (let* ((first (agent-shell-crew-queue-create root "human" :title "Build" :owner "owner@x" :ref "37")))
+      (agent-shell-crew-queue-claim root "owner@x" first)
+      (agent-shell-crew-queue-handoff root "owner@x" first "check@x" "built")
+      (crew-test--age root first 30)
+      (should (= (agent-shell-crew-queue-archive root 7) 0))
+      (should (agent-shell-crew-queue-get root first)))))
+
+(ert-deftest crew-queue-archive-is-not-a-queue-file ()
+  "Nothing that scans the directory for queues may read the archive as one."
+  (crew-test--with-project root
+    (crew-test--closed root "Old" nil 10)
+    (agent-shell-crew-queue-archive root 7)
+    (should (file-exists-p (agent-shell-crew-archive-file root)))
+    (should-not (agent-shell-crew--queue-file-root (agent-shell-crew-archive-file root)))))
+
+(ert-deftest crew-queue-archive-nil-days-never-archives ()
+  (crew-test--with-project root
+    (crew-test--closed root "Old" nil 400)
+    (let ((agent-shell-crew-archive-days nil))
+      (should (= (agent-shell-crew-queue-archive root) 0)))))
+
 ;;; agent-shell-crew-queue-test.el ends here

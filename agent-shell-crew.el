@@ -336,11 +336,14 @@ needs messages waiting and why it is off by default."
               (agent-shell-crew--say (format "%s looks stuck: %s" name why))))))
          (t
           (setq agent-shell-crew--warned (delq buffer agent-shell-crew--warned)))))))
-  (setq agent-shell-crew--warned (seq-filter #'buffer-live-p agent-shell-crew--warned)))
+  (setq agent-shell-crew--warned (seq-filter #'buffer-live-p agent-shell-crew--warned))
+  (agent-shell-crew--archive-daily))
 
 ;;;###autoload
 (define-minor-mode agent-shell-crew-watch-mode
-  "Check every crew member each minute, and warn once when one is stuck."
+  "Check every crew member each minute, and warn once when one is stuck.
+Also archives each running crew's long-closed items once a day; see
+`agent-shell-crew-archive-days'."
   :global t
   :group 'agent-shell-crew
   (when agent-shell-crew--watch-timer
@@ -441,6 +444,29 @@ Interactively, read ROOT and a comma-separated list of ROLES."
     (let ((socket (agent-shell-crew--server-socket)))
       (delq nil (mapcar (lambda (role) (agent-shell-crew--start-member root role :socket socket))
                         roles)))))
+
+;;;###autoload
+(defun agent-shell-crew-archive (root)
+  "Move the crew at ROOT's long-closed items into its archive file.
+See `agent-shell-crew-queue-archive'.  The board still shows them."
+  (interactive (list (agent-shell-crew--read-root "Archive crew: ")))
+  (let ((n (agent-shell-crew-queue-archive root)))
+    (when (called-interactively-p 'interactive)
+      (message "Archived %d item%s" n (if (= n 1) "" "s")))
+    n))
+
+(defvar agent-shell-crew--last-archive nil
+  "When `agent-shell-crew-watch-mode' last archived, or nil.")
+
+(defun agent-shell-crew--archive-daily ()
+  "Archive every running crew once a day.  Never signals."
+  (when (and agent-shell-crew-archive-days
+             (or (not agent-shell-crew--last-archive)
+                 (> (float-time (time-subtract nil agent-shell-crew--last-archive)) 86400)))
+    (setq agent-shell-crew--last-archive (current-time))
+    (dolist (root (agent-shell-crew--running-roots))
+      (condition-case err (agent-shell-crew-queue-archive root)
+        (error (message "agent-shell-crew: archiving %s failed: %s" root (error-message-string err)))))))
 
 ;;; Stopping a crew
 

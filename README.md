@@ -109,6 +109,16 @@ ACTIVE (`C-u` to stop anyway). `M-x agent-shell-crew-restart-profile` stops
 and starts a profile — for a change members only see at startup: a brief, the
 tool schema, a directory. The queue is untouched either way.
 
+## Archive
+
+The queue only grows, and every write parses all of it. Items closed more than
+`agent-shell-crew-archive-days` (7) ago move to `<queue>-archive.org` beside it
+-- once a day while `agent-shell-crew-watch-mode` runs, or now with
+`M-x agent-shell-crew-archive`. An item whose ref still has open work stays,
+so a hand-off chain in progress keeps its history. The board reads both files,
+so archived work is still on it. The archive is written before the queue is
+cut: an interruption leaves an item in both, never in neither.
+
 ## Settings
 
 | Setting | Default |
@@ -123,6 +133,7 @@ tool schema, a directory. The queue is untouched either way.
 | `agent-shell-crew-trunk` | `"main"` |
 | `agent-shell-crew-stages` | none; or `:stages` in a profile |
 | `agent-shell-crew-check-minutes` | `5` |
+| `agent-shell-crew-archive-days` | `7`; `nil` never archives |
 
 To show parked items in your agenda:
 `(add-to-list 'org-agenda-files agent-shell-crew-directory)`.

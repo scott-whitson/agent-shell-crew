@@ -263,6 +263,31 @@
   (should (equal (mapcar #'car (agent-shell-crew-board--format '((:name "deployed") (:name "accepted"))))
                  '("Ref" "State" "Merged" "deployed" "accepted" "Title" "Status"))))
 
+;;; Archive
+
+(ert-deftest crew-board-shows-archived-work ()
+  (crew-board-test--with root
+    (let ((id (agent-shell-crew-queue-create root "human" :title "Old work" :owner "owner@my-app"
+                                             :ref "12" :status "Merged; accepted.")))
+      (agent-shell-crew-queue-claim root "owner@my-app" id)
+      (agent-shell-crew-queue-done root "owner@my-app" id "done")
+      (agent-shell-crew--with-queue root
+        (agent-shell-crew--goto id)
+        (while (re-search-forward "^- \\[[^]]+\\]" nil t)
+          (replace-match "- [2026-01-01 Thu 09:00]" t t)))
+      (should (= (agent-shell-crew-queue-archive root 7) 1))
+      (should-not (agent-shell-crew-queue-list root))
+      (let ((row (car (agent-shell-crew-board--rows root))))
+        (should (equal (plist-get row :ref) "12"))
+        (should (equal (plist-get row :status) "Merged; accepted."))))))
+
+(ert-deftest crew-board-an-item-in-both-files-is-shown-once ()
+  "An archive interrupted between its two writes leaves a duplicate."
+  (crew-board-test--with root
+    (agent-shell-crew-queue-create root "human" :title "T" :owner "owner@my-app" :ref "7")
+    (copy-file (agent-shell-crew-queue-file root) (agent-shell-crew-archive-file root))
+    (should (= (length (agent-shell-crew-board--all-items root)) 1))))
+
 ;;; Buffer
 
 (ert-deftest crew-board-buffer-renders-a-row-with-its-sentence ()
