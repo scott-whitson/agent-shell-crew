@@ -92,6 +92,7 @@
         (should (= (length rows) 2))
         (let ((row (seq-find (lambda (r) (equal (plist-get r :ref) "37")) rows)))
           (should (equal (plist-get row :state) "PENDING"))
+          (should (equal (plist-get row :title) "Order lines"))
           (should (equal (plist-get row :owner) "check@my-app"))
           (should (equal (plist-get row :status) "Built; waiting on its check.")))))))
 

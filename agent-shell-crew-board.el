@@ -195,7 +195,9 @@ ITEMS, when given, is ROOT's queue as already read."
                                                      (plist-get i :log))))
                                  members))))
          (list :ref key
-               :title (plist-get latest :title)
+               ;; The first item names the work; later ones are hand-offs and
+               ;; reviews of it ("Review bundle 2200").
+               :title (plist-get (car members) :title)
                :state (plist-get latest :state)
                :owner (plist-get latest :owner)
                :id (plist-get latest :id)
