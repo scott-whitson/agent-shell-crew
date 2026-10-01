@@ -160,14 +160,24 @@ Point does not move, so the item can still be read afterwards."
   "Keep TEXT inside an item: indent any line that starts with a star."
   (replace-regexp-in-string "^\\*" " *" (string-trim-right text)))
 
+(defun agent-shell-crew--put-outcome (status branch)
+  "Record STATUS and BRANCH on the item at point when they are non-blank.
+STATUS is one sentence on where the work stands and whether it worked;
+BRANCH is its git branch.  Blank values leave what was there."
+  (unless (agent-shell-crew--blank-p status)
+    (org-entry-put nil "STATUS" (agent-shell-crew--clean-line status)))
+  (unless (agent-shell-crew--blank-p branch)
+    (org-entry-put nil "BRANCH" (agent-shell-crew--clean-line branch))))
+
 (defun agent-shell-crew--blank-p (value)
   "Non-nil when VALUE is nil or a blank string."
   (or (null value) (and (stringp value) (string-empty-p (string-trim value)))))
 
-(cl-defun agent-shell-crew-queue-create (root actor &key title brief owner evidence ref parent)
+(cl-defun agent-shell-crew-queue-create (root actor &key title brief owner evidence ref parent
+                                              status branch)
   "Create an item in ROOT's queue on behalf of ACTOR and return its id.
-TITLE and OWNER are required.  BRIEF, EVIDENCE, REF and PARENT are
-optional strings."
+TITLE and OWNER are required.  BRIEF, EVIDENCE, REF, PARENT, STATUS and
+BRANCH are optional strings."
   (when (agent-shell-crew--blank-p title) (agent-shell-crew--fail "An item needs a title"))
   (when (agent-shell-crew--blank-p owner) (agent-shell-crew--fail "An item needs an owner"))
   (let (id)
@@ -189,6 +199,7 @@ optional strings."
         (org-entry-put nil "EVIDENCE" (agent-shell-crew--clean-line evidence)))
       (unless (agent-shell-crew--blank-p ref)
         (org-entry-put nil "REF" (agent-shell-crew--clean-line ref)))
+      (agent-shell-crew--put-outcome status branch)
       (org-end-of-subtree t t)
       (unless (bolp) (insert "\n"))
       (unless (agent-shell-crew--blank-p brief)
@@ -224,6 +235,8 @@ optional strings."
           :parent (org-entry-get nil "PARENT")
           :evidence (org-entry-get nil "EVIDENCE")
           :ref (org-entry-get nil "REF")
+          :status (org-entry-get nil "STATUS")
+          :branch (org-entry-get nil "BRANCH")
           :question (org-entry-get nil "QUESTION")
           :decision (org-entry-get nil "DECISION")
           :brief (string-trim (buffer-substring-no-properties
@@ -302,14 +315,25 @@ Only the owner or the human may add notes."
     (unless (equal actor "human") (agent-shell-crew--require-owner actor))
     (agent-shell-crew--log "note by %s: %s" actor (agent-shell-crew--clean-line text))))
 
-(defun agent-shell-crew-queue-park (root actor id question &optional evidence)
+(defun agent-shell-crew-queue-set-status (root actor id status)
+  "ACTOR rewrites the one-sentence STATUS of item ID in ROOT's queue.
+Only the owner or the human may; the change is logged with the old text."
+  (when (agent-shell-crew--blank-p status) (agent-shell-crew--fail "A status needs text"))
+  (agent-shell-crew--mutate root id 'status
+    (unless (equal actor "human") (agent-shell-crew--require-owner actor))
+    (agent-shell-crew--log "status by %s: %s" actor (agent-shell-crew--clean-line status))
+    (agent-shell-crew--put-outcome status nil)))
+
+(defun agent-shell-crew-queue-park (root actor id question &optional evidence status)
   "ACTOR parks item ID in ROOT's queue on the human with QUESTION.
-EVIDENCE, when non-blank, replaces the item's evidence."
+EVIDENCE, when non-blank, replaces the item's evidence.  STATUS is as for
+`agent-shell-crew--put-outcome'."
   (when (agent-shell-crew--blank-p question) (agent-shell-crew--fail "Parking needs a question"))
   (agent-shell-crew--mutate root id 'park
     (agent-shell-crew--require-owner actor)
     (agent-shell-crew--require-state "ACTIVE")
     (org-entry-put nil "QUESTION" (agent-shell-crew--clean-line question))
+    (agent-shell-crew--put-outcome status nil)
     (unless (agent-shell-crew--blank-p evidence)
       (org-entry-put nil "EVIDENCE" (agent-shell-crew--clean-line evidence)))
     (agent-shell-crew--set-state "PARKED")
@@ -326,20 +350,24 @@ Returns the item's owner, who should be told."
     (agent-shell-crew--log "decided by human: %s" (agent-shell-crew--clean-line decision))
     (org-entry-get nil "OWNER")))
 
-(defun agent-shell-crew-queue-done (root actor id reason &optional canceled)
+(defun agent-shell-crew-queue-done (root actor id reason &optional canceled status branch)
   "ACTOR closes item ID in ROOT's queue for REASON.
-The item becomes CANCELED when CANCELED is non-nil, DONE otherwise."
+The item becomes CANCELED when CANCELED is non-nil, DONE otherwise.
+STATUS and BRANCH are as for `agent-shell-crew--put-outcome'."
   (agent-shell-crew--mutate root id 'done
     (agent-shell-crew--require-owner actor)
     (agent-shell-crew--require-state "PENDING" "ACTIVE")
     (agent-shell-crew--set-state (if canceled "CANCELED" "DONE"))
+    (agent-shell-crew--put-outcome status branch)
     (agent-shell-crew--log "%s by %s: %s" (if canceled "canceled" "done") actor
                            (if (agent-shell-crew--blank-p reason) "-"
                              (agent-shell-crew--clean-line reason)))))
 
-(defun agent-shell-crew-queue-handoff (root actor id to summary &optional brief)
+(defun agent-shell-crew-queue-handoff (root actor id to summary &optional brief status branch)
   "ACTOR hands item ID in ROOT's queue to TO with SUMMARY and BRIEF.
-Closes ID as HANDED and returns the id of the new item TO owns."
+Closes ID as HANDED and returns the id of the new item TO owns, which
+inherits the ref, the branch and the status.  STATUS and BRANCH are as
+for `agent-shell-crew--put-outcome'."
   (when (agent-shell-crew--blank-p to) (agent-shell-crew--fail "A hand-off needs a recipient"))
   (when (equal to actor) (agent-shell-crew--fail "%s cannot hand off to itself" actor))
   (when (agent-shell-crew--blank-p summary) (agent-shell-crew--fail "A hand-off needs a summary"))
@@ -347,6 +375,7 @@ Closes ID as HANDED and returns the id of the new item TO owns."
                   (agent-shell-crew--require-owner actor)
                   (agent-shell-crew--require-state "ACTIVE")
                   (agent-shell-crew--set-state "HANDED")
+                  (agent-shell-crew--put-outcome status branch)
                   (agent-shell-crew--log "handed to %s: %s" to (agent-shell-crew--clean-line summary))
                   (agent-shell-crew--read-item))))
     (agent-shell-crew-queue-create
@@ -356,6 +385,8 @@ Closes ID as HANDED and returns the id of the new item TO owns."
      :parent id
      :evidence (plist-get source :evidence)
      :ref (plist-get source :ref)
+     :status (plist-get source :status)
+     :branch (plist-get source :branch)
      :brief (concat "Handed off by " actor ": " summary
                     (if (agent-shell-crew--blank-p brief) "" (concat "\n\n" brief))))))
 

@@ -24,21 +24,29 @@ def _tool(name, description, properties=None, required=()):
                             "required": list(required), "additionalProperties": False}}
 
 S = {"type": "string"}
+# Optional on every tool that changes an item. A status is ONE sentence on
+# where the work stands and whether it worked; the human's board shows it.
+STATUS = {"type": "string", "description": "One sentence: what state the work is in and "
+          "whether it succeeded, e.g. 'Built and gated, merged to main; live check not reached.'"}
+BRANCH = {"type": "string", "description": "The git branch this work is on, if any."}
 TOOLS = [
     _tool("crew_mine", "List the crew items you own."),
     _tool("crew_list", "List every crew item in this project."),
     _tool("crew_show", "Show one crew item: brief, properties and log.", {"id": S}, ["id"]),
     _tool("crew_create", "Create a crew item for a crew member, or for `human`.",
-          {"title": S, "brief": S, "owner": S, "evidence": S, "ref": S}, ["title", "brief", "owner"]),
+          {"title": S, "brief": S, "owner": S, "evidence": S, "ref": S, "status": STATUS,
+           "branch": BRANCH}, ["title", "brief", "owner"]),
     _tool("crew_claim", "Claim an item you own: PENDING to ACTIVE.", {"id": S}, ["id"]),
     _tool("crew_note", "Append a line to an item's log.", {"id": S, "text": S}, ["id", "text"]),
     _tool("crew_handoff", "Close your item as HANDED and open a new item for `to`.",
-          {"id": S, "to": S, "summary": S, "brief": S}, ["id", "to", "summary"]),
+          {"id": S, "to": S, "summary": S, "brief": S, "status": STATUS, "branch": BRANCH},
+          ["id", "to", "summary"]),
     _tool("crew_park", "Park your item on the human with a question. Write options inline as "
           "`(1) ...; (2) ...` and point `evidence` at a file the human should read.",
-          {"id": S, "question": S, "evidence": S}, ["id", "question"]),
+          {"id": S, "question": S, "evidence": S, "status": STATUS}, ["id", "question"]),
     _tool("crew_done", "Close your item as DONE, or CANCELED when `canceled` is true.",
-          {"id": S, "reason": S, "canceled": {"type": "boolean"}}, ["id", "reason"]),
+          {"id": S, "reason": S, "canceled": {"type": "boolean"}, "status": STATUS,
+           "branch": BRANCH}, ["id", "reason"]),
 ]
 ALLOWED = {t["name"]: set(t["inputSchema"]["properties"]) for t in TOOLS}
 

@@ -289,12 +289,19 @@ REASON is one line saying why.  ALL-ITEMS is as for
               (cons mtime items))
         items))))
 
+(declare-function agent-shell-crew-board "agent-shell-crew-board")
+
+(defun agent-shell-crew--open-board (root)
+  "Open the board for ROOT's crew: the overview the dot stands for."
+  (require 'agent-shell-crew-board)
+  (agent-shell-crew-board root))
+
 ;;;###autoload
 (defun agent-shell-crew-status-segment ()
   "A dot for every running crew's worst health, or nil when none runs.
 For a status bar: the queue is reread only when its file changes, so
 calling this every few seconds costs a stat per crew.  Hovering names
-the reason; clicking opens the crew list.  Never signals."
+the reason; clicking opens the board.  Never signals."
   (condition-case nil
       (when-let* ((roots (agent-shell-crew--running-roots)))
         (let* ((healths (mapcar (lambda (root)
@@ -307,9 +314,9 @@ the reason; clicking opens the crew list.  Never signals."
                (state (cadr worst))
                (map (make-sparse-keymap)))
           (define-key map [tab-bar mouse-1]
-                      (lambda () (interactive) (agent-shell-crew-list (car worst))))
+                      (lambda () (interactive) (agent-shell-crew--open-board (car worst))))
           (define-key map [mode-line mouse-1]
-                      (lambda () (interactive) (agent-shell-crew-list (car worst))))
+                      (lambda () (interactive) (agent-shell-crew--open-board (car worst))))
           (propertize "●"
                       'face (intern (format "agent-shell-crew-health-%s" state))
                       'help-echo (mapconcat (lambda (h)

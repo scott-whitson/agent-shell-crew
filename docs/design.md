@@ -233,6 +233,39 @@ The package still does not manage git. Creating the worktrees, and anything
 that should be true of them (database ports, local permission rules), is the
 user's own setup.
 
+## The board: where each piece of work stands
+
+The crew list shows who is doing what *now*. Once the queue is empty it shows
+nothing, which is exactly when a human asks "so what got done?". The board
+answers that: one row per piece of work, how far it has got, and one sentence
+on whether it worked.
+
+**A piece of work is a ref.** Items already carry an optional `REF`, kept
+across hand-offs; every item sharing a ref is one row. An item with no ref is
+its own row. The package gives refs no meaning: a ticket number, a package
+number, a branch name, anything.
+
+**Each item may record its state in one sentence.** `crew_create`,
+`crew_handoff`, `crew_park` and `crew_done` take an optional `status`: one
+sentence saying what state the work is in and whether it succeeded ("Built and
+gated, merged to main; not deployed, live check not reached."). It is stored as
+the item's `STATUS` property. The package never writes one itself -- it runs no
+model -- so a row with no status shows the reason or summary of its latest
+event instead. The human can rewrite any row's sentence from the board.
+
+**Each item may record its branch.** The same tools take an optional `branch`,
+stored as `BRANCH` and carried across hand-offs. With a branch, the board asks
+git whether it has reached the crew's trunk (`:trunk` in a profile, otherwise
+`agent-shell-crew-trunk`, default `main`).
+
+**Stages, later.** A crew will be able to declare further stages -- some
+recorded by a member or the human with evidence (`crew_stage`), some answered
+by a project-supplied check that runs in the background, never in a status bar
+render -- each owned by a role or the human. The health dot then reads grey
+only when nothing waits at a stage the human owns. Stages show; they never
+act: a board with a deploy button is where a project's risk would creep into a
+shared package.
+
 ## Human commands
 
 | Command | Does |
