@@ -79,14 +79,17 @@ nothing restarts a cut-off turn by itself. Auto-recover tells it to resume, at
 most every 30 minutes.
 
 **The board.** `M-x agent-shell-crew-board`, or click the dot. Items sharing a
-`ref` are one row; the row shows the latest state, whether its `branch`
-reached the trunk (`:trunk` in a profile, else `agent-shell-crew-trunk`), and
-the one-sentence `status` its members last wrote — members are asked for one
-on every hand-off, park and close. Keys: `RET` the item, `e` rewrite the
+`ref` are one row: its ref, its state, its title and the one-sentence
+`status` its members last wrote (members are asked for one on every hand-off,
+park and close). Finished work whose `branch` has reached the trunk (`:trunk`
+in a profile, else `agent-shell-crew-trunk`) reads **MERGED**. Every state has
+its own face (`agent-shell-crew-board-parked`, `-active`, `-pending`,
+`-handed`, `-done`, `-merged`, `-canceled`). Columns size themselves to what
+they hold and to the window, so a row fits on one line. Keys: `RET` the item, `e` rewrite the
 sentence, `s` record a stage, `b` record a branch, `a` show housekeeping rows,
 `g` refresh.
 
-**Stages** are what work passes through after it merges, declared per crew:
+**Stages** are optional: what work passes through after it merges, declared per crew. Each becomes a column of marks:
 
 ```elisp
 :stages ((:name "deployed" :owner "human"

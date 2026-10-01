@@ -247,6 +247,49 @@ MERGED is `yes', `no', `unknown' or `none' (no branch).  Each stage is
                          (t 'no))))))
            stages))))
 
+(defface agent-shell-crew-board-parked '((t :inherit warning :weight bold))
+  "A board row waiting on the human."
+  :group 'agent-shell-crew)
+(defface agent-shell-crew-board-active '((t :inherit font-lock-function-name-face :weight bold))
+  "A board row a member is working on."
+  :group 'agent-shell-crew)
+(defface agent-shell-crew-board-pending '((t :inherit font-lock-constant-face))
+  "A board row queued for a member who has not started it."
+  :group 'agent-shell-crew)
+(defface agent-shell-crew-board-handed '((t :inherit font-lock-type-face))
+  "A board row handed to another member."
+  :group 'agent-shell-crew)
+(defface agent-shell-crew-board-done '((t :inherit success))
+  "A finished board row whose work has not reached the trunk."
+  :group 'agent-shell-crew)
+(defface agent-shell-crew-board-merged '((t :inherit success :weight bold))
+  "A finished board row whose branch has reached the trunk."
+  :group 'agent-shell-crew)
+(defface agent-shell-crew-board-canceled '((t :inherit shadow))
+  "A canceled board row."
+  :group 'agent-shell-crew)
+
+(defun agent-shell-crew-board--state-label (row progress)
+  "ROW's state as the board shows it, given its PROGRESS.
+Finished work whose branch has reached the trunk reads MERGED: the one
+fact a Merged column used to spend seven characters on."
+  (let ((state (or (plist-get row :state) "")))
+    (if (and (eq (car progress) 'yes) (member state '("DONE" "HANDED")))
+        "MERGED"
+      state)))
+
+(defun agent-shell-crew-board--state-face (label)
+  "The face for state LABEL."
+  (pcase label
+    ("PARKED" 'agent-shell-crew-board-parked)
+    ("ACTIVE" 'agent-shell-crew-board-active)
+    ("PENDING" 'agent-shell-crew-board-pending)
+    ("HANDED" 'agent-shell-crew-board-handed)
+    ("DONE" 'agent-shell-crew-board-done)
+    ("MERGED" 'agent-shell-crew-board-merged)
+    ("CANCELED" 'agent-shell-crew-board-canceled)
+    (_ 'default)))
+
 (defun agent-shell-crew-board--mark (state)
   "The board's mark for progress STATE."
   (pcase state
@@ -258,16 +301,11 @@ MERGED is `yes', `no', `unknown' or `none' (no branch).  Each stage is
 
 (defun agent-shell-crew-board--entry (row progress)
   "Return the `tabulated-list-entries' element for ROW with its PROGRESS."
-  (let ((state (or (plist-get row :state) "")))
+  (let ((label (agent-shell-crew-board--state-label row progress)))
     (list row
           (vconcat
            (vector (or (plist-get row :ref) "")
-                   (propertize state 'face (pcase state
-                                             ("PARKED" 'warning)
-                                             ((or "DONE" "HANDED") 'success)
-                                             ("CANCELED" 'shadow)
-                                             (_ 'default)))
-                   (agent-shell-crew-board--mark (car progress)))
+                   (propertize label 'face (agent-shell-crew-board--state-face label)))
            (mapcar #'agent-shell-crew-board--mark (cdr progress))
            (vector (or (plist-get row :title) "")
                    (if (plist-get row :status)
@@ -330,12 +368,24 @@ answer is older than `agent-shell-crew-check-minutes'."
 (defvar-local agent-shell-crew-board--all nil
   "Non-nil when this board also shows housekeeping rows.")
 
-(defun agent-shell-crew-board--format (stages)
-  "The `tabulated-list-format' for a board with STAGES."
-  (vconcat [("Ref" 10 t) ("State" 9 t) ("Merged" 7 t)]
-           (mapcar (lambda (st) (let ((n (plist-get st :name))) (list n (max 7 (1+ (length n))) t)))
-                   stages)
-           [("Title" 40 t) ("Status" 0 nil)]))
+(defun agent-shell-crew-board--format (stages &optional rows width)
+  "The `tabulated-list-format' for a board with STAGES, ROWS and WIDTH.
+Columns fit what they hold, so the title and status start as far left as
+they can: Ref is as wide as the longest ref (at most 8, so a long one is cut), and Title as the
+longest title, but never more than 45% of what the window has left, so the
+status keeps room for its sentence.  WIDTH defaults to 100."
+  (let* ((width (or width 100))
+         (longest (lambda (key floor cap)
+                    (min cap (max floor (apply #'max 0 (mapcar (lambda (r) (length (or (plist-get r key) "")))
+                                                                 rows))))))
+         (ref (funcall longest :ref 3 8))
+         (marks (mapcar (lambda (st) (let ((n (plist-get st :name))) (list n (1+ (length n)) t)))
+                        stages))
+         (used (+ ref 1 9 (apply #'+ (mapcar #'cadr marks))))
+         (title (min (funcall longest :title 10 200) (max 20 (floor (* 0.45 (- width used)))))))
+    (vconcat (vector (list "Ref" ref t) (list "State" 8 t))
+             marks
+             (vector (list "Title" title t) (list "Status" 0 nil)))))
 
 (defun agent-shell-crew-board--refresh ()
   "Recompute the current board's rows."
@@ -354,7 +404,10 @@ answer is older than `agent-shell-crew-check-minutes'."
                   (agent-shell-crew-board--waiting-in
                    root (seq-remove (lambda (x) (agent-shell-crew-board--housekeeping-p (car x))) rp)
                    stages)))
-      (setq tabulated-list-format (agent-shell-crew-board--format stages))
+      (setq tabulated-list-format
+            (agent-shell-crew-board--format
+             stages shown (let ((w (get-buffer-window (current-buffer) t)))
+                            (if w (window-body-width w) 100))))
       (tabulated-list-init-header)
       (setq tabulated-list-entries
             (mapcar (lambda (x) (agent-shell-crew-board--entry (car x) (cdr x))) rp))

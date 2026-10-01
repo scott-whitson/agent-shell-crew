@@ -261,7 +261,27 @@
 
 (ert-deftest crew-board-columns-include-each-stage ()
   (should (equal (mapcar #'car (agent-shell-crew-board--format '((:name "deployed") (:name "accepted"))))
-                 '("Ref" "State" "Merged" "deployed" "accepted" "Title" "Status"))))
+                 '("Ref" "State" "deployed" "accepted" "Title" "Status"))))
+
+(ert-deftest crew-board-columns-without-stages-are-four ()
+  (should (equal (mapcar #'car (agent-shell-crew-board--format nil))
+                 '("Ref" "State" "Title" "Status"))))
+
+(ert-deftest crew-board-columns-fit-what-they-hold ()
+  (let* ((rows (list (list :ref "48" :title "The agent sees the whole conversation")
+                     (list :ref "flaky-via-ctx" :title "A flaky test")))
+         (fmt (agent-shell-crew-board--format nil rows 95)))
+    (should (= (nth 1 (aref fmt 0)) 8))           ; Ref: capped at 8
+    (should (<= (nth 1 (aref fmt 2)) (floor (* 0.45 (- 95 8 1 9)))))
+    (should (= (nth 1 (aref fmt 3)) 0))))         ; Status takes the rest
+
+(ert-deftest crew-board-finished-merged-work-reads-merged ()
+  (should (equal (agent-shell-crew-board--state-label '(:state "DONE") '(yes)) "MERGED"))
+  (should (equal (agent-shell-crew-board--state-label '(:state "HANDED") '(yes)) "MERGED"))
+  (should (equal (agent-shell-crew-board--state-label '(:state "DONE") '(no)) "DONE"))
+  (should (equal (agent-shell-crew-board--state-label '(:state "ACTIVE") '(yes)) "ACTIVE"))
+  (should (eq (agent-shell-crew-board--state-face "MERGED") 'agent-shell-crew-board-merged))
+  (should (eq (agent-shell-crew-board--state-face "PENDING") 'agent-shell-crew-board-pending)))
 
 ;;; Archive
 
