@@ -657,8 +657,11 @@ is prose, and reading it as an option recorded the wrong answer once."
   "Create an item in ROOT's crew for OWNER with TITLE, BRIEF and EVIDENCE.
 Returns the new item's id."
   (interactive
+   ;; The crew's root, asked for only when it is not obvious: picking a
+   ;; directory by hand invites a member's worktree, which is a queue
+   ;; nobody reads.
    (let* ((root (file-name-as-directory
-                 (expand-file-name (read-directory-name "Project: " (agent-shell-crew--default-root)))))
+                 (expand-file-name (agent-shell-crew--read-root "Crew: "))))
           (candidates (agent-shell-crew--owner-candidates root))
           (owner (completing-read (format "For (default %s): " (car candidates))
                                   candidates nil t nil nil (car candidates)))

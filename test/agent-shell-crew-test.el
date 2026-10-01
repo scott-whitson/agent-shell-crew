@@ -487,4 +487,18 @@
         (should (= (length after) 3))
         (should-not (seq-intersection before after))))))
 
+;;; Creating an item from Emacs
+
+(ert-deftest crew-new-uses-the-running-crew-without-asking-for-a-directory ()
+  (crew-profile-test--with (root lane brief)
+    (ignore lane brief)
+    (agent-shell-crew-start-profile "app")
+    (let ((default-directory lane) (asked nil))
+      (cl-letf (((symbol-function 'read-directory-name) (lambda (&rest _) (setq asked t) lane))
+                ((symbol-function 'completing-read) (lambda (_p coll &rest _) (car coll)))
+                ((symbol-function 'read-string) (lambda (p &rest _) (if (string-prefix-p "Title" p) "T" ""))))
+        (call-interactively #'agent-shell-crew-new))
+      (should-not asked)
+      (should (equal (plist-get (car (agent-shell-crew-queue-list root)) :title) "T")))))
+
 ;;; agent-shell-crew-test.el ends here
