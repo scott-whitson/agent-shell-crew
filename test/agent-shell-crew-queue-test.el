@@ -380,4 +380,17 @@
     (let ((agent-shell-crew-archive-days nil))
       (should (= (agent-shell-crew-queue-archive root) 0)))))
 
+;;; Org's element cache
+
+(ert-deftest crew-queue-buffers-run-without-the-element-cache ()
+  "Programmatic inserts and deletes desynchronise it, and the human sees warnings."
+  (crew-test--with-project root
+    (let ((org-element-use-cache t))
+      (crew-test--closed root "Old" nil 10)
+      (with-current-buffer (find-file-noselect (agent-shell-crew-queue-file root))
+        (should-not org-element-use-cache))
+      (agent-shell-crew-queue-archive root 7)
+      (with-current-buffer (find-file-noselect (agent-shell-crew-archive-file root))
+        (should-not org-element-use-cache)))))
+
 ;;; agent-shell-crew-queue-test.el ends here

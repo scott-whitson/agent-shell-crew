@@ -99,6 +99,16 @@ saved and never mistaken for a human's unsaved edit."
     (erase-buffer)
     (set-buffer-modified-p nil)))
 
+(defun agent-shell-crew--quiet-org ()
+  "Turn off Org's element cache in the current buffer.
+The crew writes this buffer by inserting and deleting text, often while
+the human has it open, and the cache falls out of step with edits made
+that way: \"org-element--cache: Added org-data parent to non-headline
+element\", nine times in one morning on a live queue.  Nothing here reads
+the cache, so it is only ever a source of those warnings."
+  (setq-local org-element-use-cache nil)
+  (when (fboundp 'org-element-cache-reset) (org-element-cache-reset)))
+
 (defmacro agent-shell-crew--with-queue (root &rest body)
   "Run BODY in the queue buffer for ROOT, then save it.
 Creates the file and its header when missing.  Refuses when the buffer
@@ -111,6 +121,7 @@ has unsaved edits, so a hand edit is never silently written over."
        (when (buffer-modified-p)
          (agent-shell-crew--fail "%s has unsaved edits; save or revert it first" file))
        (unless (derived-mode-p 'org-mode) (org-mode))
+       (agent-shell-crew--quiet-org)
        (agent-shell-crew--ensure-header ,root)
        (prog1 (condition-case err
                   (save-excursion (save-restriction (widen) ,@body))
@@ -442,6 +453,7 @@ fail this test, so they are never counted as queues."
   (with-temp-buffer
     (insert-file-contents file)
     (let ((org-inhibit-startup t) (org-mode-hook nil)) (org-mode))
+    (agent-shell-crew--quiet-org)
     (let (acc)
       (org-map-entries
        (lambda () (when (org-entry-get nil "CREW_ID") (push (agent-shell-crew--read-item) acc)))
@@ -527,6 +539,8 @@ leaves an item in both files, never in neither.  Returns how many moved."
               (agent-shell-crew--sync-with-disk)
               (when (buffer-modified-p)
                 (agent-shell-crew--fail "%s has unsaved edits; save or revert it first" file))
+              (unless (derived-mode-p 'org-mode) (org-mode))
+              (agent-shell-crew--quiet-org)
               (save-restriction
                 (widen)
                 (when (= (buffer-size) 0)
