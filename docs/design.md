@@ -1,10 +1,9 @@
 # agent-shell-crew — design
 
-**Status:** 0.1.0 built; health, stuck recovery, the board and stages added
-2026-09-30 to 2026-10-01 and run against a live crew. First live run 2026-09-30 passed create → claim →
-hand-off → independent check → done, with real Claude Code sessions; it found
-four bugs the stub-based tests could not (see git log). The park → decide path
-is not yet exercised live. Profiles (below) are built, not yet run live.
+**Status:** 0.2.0. The queue, hand-offs, decisions and profiles (0.1.0), then
+the health dot, stuck-member detection and recovery, the board with stages,
+re-parking, stop and restart, and archiving -- each run against a live crew of
+eight sessions before release.
 **Date:** 2026-09-30
 
 A small crew of [agent-shell](https://github.com/xenodium/agent-shell) sessions

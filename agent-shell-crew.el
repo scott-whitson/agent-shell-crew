@@ -4,7 +4,7 @@
 
 ;; Author: Scott Whitson <scott@scottwhitson.com>
 ;; URL: https://github.com/scott-whitson/agent-shell-crew
-;; Version: 0.1.0
+;; Version: 0.2.0
 ;; Package-Requires: ((emacs "29.1") (agent-shell "0.81.1"))
 ;; Keywords: tools, convenience
 ;; SPDX-License-Identifier: GPL-3.0-or-later
