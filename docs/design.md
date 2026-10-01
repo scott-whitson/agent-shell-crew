@@ -1,6 +1,7 @@
 # agent-shell-crew — design
 
-**Status:** 0.1.0 built. First live run 2026-09-30 passed create → claim →
+**Status:** 0.1.0 built; health, stuck recovery, the board and stages added
+2026-09-30 to 2026-10-01 and run against a live crew. First live run 2026-09-30 passed create → claim →
 hand-off → independent check → done, with real Claude Code sessions; it found
 four bugs the stub-based tests could not (see git log). The park → decide path
 is not yet exercised live. Profiles (below) are built, not yet run live.
@@ -265,6 +266,25 @@ render -- each owned by a role or the human. The health dot then reads grey
 only when nothing waits at a stage the human owns. Stages show; they never
 act: a board with a deploy button is where a project's risk would creep into a
 shared package.
+
+## Health, stuck members and recovery
+
+One dot answers "is the crew all right?" without opening anything: red
+stalled, amber waiting on the human, green working, grey idle, worst state
+across running crews first. It costs a stat per crew per redraw: the queue is
+reread only when its file changes, and stage checks never run in the redraw.
+
+**Stuck is its own state** because the failure is invisible from inside
+agent-shell. Measured 2026-09-30: a gate's turn ended at 22:10, the end never
+reached its buffer, and the buffer read "busy" until 07:49 -- with two of the
+human's decisions queued behind it and the dot green. A member busy and
+silent past `agent-shell-crew-stall-minutes`, or idle with a queue an
+interrupt paused, is stuck. The watcher warns once per episode, in the echo
+area as well as `*Warnings*`. Recovery (opt-in) is the two steps that fixed
+it by hand -- interrupt, then resume the queue -- and only when messages are
+waiting, never at a permission prompt, since an interrupt rejects the prompt.
+It reads two of agent-shell's internal state keys; `make api-check` fails if
+they are renamed.
 
 ## Human commands
 

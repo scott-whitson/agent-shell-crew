@@ -703,9 +703,18 @@ tells the owner."
 (defvar agent-shell-crew--parked-count 0
   "How many crew items wait on the human, as last counted.")
 
+(declare-function agent-shell-crew-status-segment "agent-shell-crew-list")
+
+(defun agent-shell-crew--mode-line-text ()
+  "The health dot of every running crew, then how many items wait on you."
+  (let ((dot (and (featurep 'agent-shell-crew-list) (agent-shell-crew-status-segment))))
+    (concat (if dot (concat " " dot) "")
+            (if (> agent-shell-crew--parked-count 0)
+                (format " crew:%d" agent-shell-crew--parked-count)
+              ""))))
+
 (defconst agent-shell-crew--mode-line
-  '(:eval (when (> agent-shell-crew--parked-count 0)
-            (format " crew:%d" agent-shell-crew--parked-count)))
+  '(:eval (agent-shell-crew--mode-line-text))
   "The mode-line construct `agent-shell-crew-mode-line-mode' adds.")
 
 (defun agent-shell-crew--refresh-count (&rest _)
@@ -715,7 +724,8 @@ tells the owner."
 
 ;;;###autoload
 (define-minor-mode agent-shell-crew-mode-line-mode
-  "Show in the mode line how many crew items wait on you."
+  "Show in the mode line each crew's health dot and how many items wait on you.
+The dot needs `agent-shell-crew-list' loaded; see `agent-shell-crew-health'."
   :global t
   :group 'agent-shell-crew
   (if agent-shell-crew-mode-line-mode
