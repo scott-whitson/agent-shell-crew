@@ -501,4 +501,32 @@
       (should-not asked)
       (should (equal (plist-get (car (agent-shell-crew-queue-list root)) :title) "T")))))
 
+;;; A member stopped by a usage limit
+
+(defconst agent-shell-crew-test--limit-tail
+  "\n╭─\n\n  ⚠ Error (-32603) ⚠\n\n  Internal error: You've hit your session limit · resets 5:50pm (America/New_York)\n\n   Details \n\n╰─\n\nClaude> "
+  "The gate's buffer as it stood on 2026-10-01 after the limit.")
+
+(ert-deftest agent-shell-crew-limit-reset-reads-the-error ()
+  (let* ((now (encode-time (list 0 30 18 1 10 2026 nil -1 nil)))
+         (reset (agent-shell-crew--limit-reset agent-shell-crew-test--limit-tail now)))
+    (should reset)
+    (should (equal (format-time-string "%H:%M" reset) "17:50"))
+    (should (time-less-p reset now))))
+
+(ert-deftest agent-shell-crew-limit-reset-reads-a-plain-tail ()
+  (let ((now (encode-time (list 0 0 9 1 10 2026 nil -1 nil))))
+    (should (equal (format-time-string
+                    "%H:%M" (agent-shell-crew--limit-reset
+                             "Not done.\n\nYou've hit your session limit · resets 1pm\n\nClaude> " now))
+                   "13:00"))))
+
+(ert-deftest agent-shell-crew-limit-reset-ignores-a-session-that-ran-since ()
+  (should-not (agent-shell-crew--limit-reset
+               (concat agent-shell-crew-test--limit-tail
+                       "resume\n\nChecked the queue; three items are open and I am on the first.\n\nClaude> "))))
+
+(ert-deftest agent-shell-crew-limit-reset-ignores-ordinary-output ()
+  (should-not (agent-shell-crew--limit-reset "All done; the gate passed.\n\nClaude> ")))
+
 ;;; agent-shell-crew-test.el ends here

@@ -73,6 +73,11 @@ warns you once, in the echo area, saying what to do. Set
 waiting: it interrupts the member, then resumes its queue. A member at a
 permission prompt is never touched.
 
+A member whose turn ended on the agent's usage-limit error ("You've hit your
+session limit · resets 5:50pm") is stuck too, once that time has passed:
+nothing restarts a cut-off turn by itself. Auto-recover tells it to resume, at
+most every 30 minutes.
+
 **The board.** `M-x agent-shell-crew-board`, or click the dot. Items sharing a
 `ref` are one row; the row shows the latest state, whether its `branch`
 reached the trunk (`:trunk` in a profile, else `agent-shell-crew-trunk`), and

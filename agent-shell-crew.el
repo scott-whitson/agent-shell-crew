@@ -257,11 +257,55 @@ of the human's decisions for an hour behind a turn that had ended."
   :type 'number
   :group 'agent-shell-crew)
 
+(defconst agent-shell-crew--limit-re
+  (concat "hit your [a-z ]*limit[^\n]*?resets[^0-9\n]*"
+          "\\([0-9]\\{1,2\\}\\)\\(?::\\([0-9]\\{2\\}\\)\\)? ?\\([ap]m\\)"
+          ;; and the time zone, which is not output that came after it.
+          "\\(?: ([^)\n]*)\\)?")
+  "Matches the agent's usage-limit error, capturing its reset time of day.")
+
+(defun agent-shell-crew--limit-reset (tail &optional now)
+  "The reset time in TAIL's last usage-limit error, or nil when TAIL has none.
+TAIL is the end of a member's buffer.  Only the LAST error counts, and only
+when nothing but the prompt follows it: a session that has run since is not
+limited.  The time is today's at NOW (default: the current time), so a reset
+earlier today is in the past."
+  (let ((start nil) (pos 0))
+    (while (string-match agent-shell-crew--limit-re tail pos)
+      (setq start (match-beginning 0) pos (match-end 0)))
+    (when (and start
+               (string-match agent-shell-crew--limit-re tail start)
+               ;; After the error: its "Details" fold, box lines and the prompt.
+               (not (string-match-p "[[:alnum:]]\\{4,\\}"
+                                    (replace-regexp-in-string
+                                     "Details\\|Claude>" "" (substring tail (match-end 0))))))
+      (let* ((hour (string-to-number (match-string 1 tail)))
+             (minute (if (match-string 2 tail) (string-to-number (match-string 2 tail)) 0))
+             (pm (equal (match-string 3 tail) "pm"))
+             (hour24 (+ (mod hour 12) (if pm 12 0)))
+             (d (decode-time (or now (current-time)))))
+        (encode-time (list 0 minute hour24 (nth 3 d) (nth 4 d) (nth 5 d)
+                           nil -1 (nth 8 d)))))))
+
+(defvar agent-shell-crew--limit-nudged nil
+  "Alist of (BUFFER . TIME): when a limited member was last told to resume.")
+
+(defun agent-shell-crew--limited (buffer)
+  "Non-nil when BUFFER's session stopped at a usage limit that has since reset."
+  (with-current-buffer buffer
+    (let ((reset (agent-shell-crew--limit-reset
+                  (buffer-substring-no-properties (max (point-min) (- (point-max) 600))
+                                                  (point-max)))))
+      (and reset (time-less-p reset nil) reset))))
+
 (defun agent-shell-crew--member-stuck (buffer)
   "Why the member session in BUFFER is stuck, or nil when it is not.
-Two ways: busy with no activity for `agent-shell-crew-stall-minutes', or
+Three ways: busy with no activity for `agent-shell-crew-stall-minutes';
 idle with prompts still queued -- agent-shell pauses its queue after an
-interrupt, and nothing resumes it.  Never signals."
+interrupt, and nothing resumes it; or idle after a usage-limit error whose
+reset time has passed -- the turn was cut off and nothing restarts it, as on
+2026-10-01, when the whole crew sat idle for 40 minutes after the reset.
+Never signals."
   (condition-case nil
       (with-current-buffer buffer
         (let* ((state (bound-and-true-p agent-shell--state))
@@ -272,6 +316,8 @@ interrupt, and nothing resumes it.  Never signals."
                             (format " (%d message%s waiting)" held (if (= held 1) "" "s"))
                           "")))
           (cond
+           ((and (not (shell-maker-busy)) (agent-shell-crew--limited buffer))
+            "stopped at a usage limit that has since reset; tell it to resume")
            ((and (shell-maker-busy) quiet (>= quiet agent-shell-crew-stall-minutes))
             (format "busy with no activity for %d min%s; interrupt it with C-c C-c"
                     (round quiet) waiting))
@@ -301,8 +347,20 @@ needs messages waiting and why it is off by default."
 (defun agent-shell-crew--recover (buffer)
   "Unstick the member session in BUFFER; return what was done, or nil."
   (with-current-buffer buffer
-    (let ((held (length (map-elt agent-shell--state :pending-prompts))))
+    (let ((held (length (map-elt agent-shell--state :pending-prompts)))
+          (nudged (alist-get buffer agent-shell-crew--limit-nudged)))
       (cond
+       ;; Cut off by a usage limit: no queue to resume, so say so. At most
+       ;; every 30 minutes, because a limit that is still on (a weekly one
+       ;; read as today's time) answers the nudge with the same error.
+       ((and (not (shell-maker-busy)) (agent-shell-crew--limited buffer))
+        (unless (and nudged (< (float-time (time-subtract nil nudged)) 1800))
+          (setf (alist-get buffer agent-shell-crew--limit-nudged) (current-time))
+          (agent-shell-crew--deliver
+           buffer (concat "The usage limit that stopped your last turn has reset. Resume: "
+                          "check your open items and carry on from where you stopped, "
+                          "re-running anything that was cut off."))
+          "told it to resume"))
        ((zerop held) nil)
        ((eq (condition-case nil (agent-shell-status :shell-buffer buffer) (error nil)) 'blocked)
         nil)
