@@ -448,4 +448,43 @@
       (with-temp-buffer (should (equal (agent-shell-crew--read-root "Crew: ") root))))))
 
 (provide 'agent-shell-crew-test)
+;;; Stopping a crew
+
+(ert-deftest crew-stop-stops-every-member-of-an-idle-crew ()
+  (crew-profile-test--with (root lane brief)
+    (ignore lane brief)
+    (agent-shell-crew-start-profile "app")
+    (should (= (agent-shell-crew-stop root) 3))
+    (should-not (agent-shell-crew--member-buffers root))))
+
+(ert-deftest crew-stop-refuses-while-a-member-works-and-names-it ()
+  (crew-profile-test--with (root lane brief)
+    (ignore lane brief)
+    (agent-shell-crew-start-profile "app")
+    (let ((agent-shell-test--busy t))
+      (let ((err (should-error (agent-shell-crew-stop root) :type 'user-error)))
+        (should (string-match-p "gate@my-app is working" (cadr err))))
+      (should (= (length (agent-shell-crew--member-buffers root)) 3))
+      (should (= (agent-shell-crew-stop root t) 3)))))
+
+(ert-deftest crew-stop-refuses-while-an-item-is-active ()
+  "Stopping a member mid-item loses the session that was doing it."
+  (crew-profile-test--with (root lane brief)
+    (ignore lane brief)
+    (agent-shell-crew-start-profile "app")
+    (let ((id (agent-shell-crew-queue-create root "human" :title "T" :owner "owner-1@my-app")))
+      (agent-shell-crew-queue-claim root "owner-1@my-app" id)
+      (let ((err (should-error (agent-shell-crew-stop root) :type 'user-error)))
+        (should (string-match-p (format "%s is ACTIVE for owner-1@my-app" id) (cadr err)))))))
+
+(ert-deftest crew-restart-profile-stops-then-starts ()
+  (crew-profile-test--with (root lane brief)
+    (ignore lane brief)
+    (agent-shell-crew-start-profile "app")
+    (let ((before (agent-shell-crew--member-buffers root)))
+      (agent-shell-crew-restart-profile "app")
+      (let ((after (agent-shell-crew--member-buffers root)))
+        (should (= (length after) 3))
+        (should-not (seq-intersection before after))))))
+
 ;;; agent-shell-crew-test.el ends here

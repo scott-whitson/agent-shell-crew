@@ -442,6 +442,73 @@ Interactively, read ROOT and a comma-separated list of ROLES."
       (delq nil (mapcar (lambda (role) (agent-shell-crew--start-member root role :socket socket))
                         roles)))))
 
+;;; Stopping a crew
+
+(defun agent-shell-crew--member-buffers (root)
+  "Every running member session of ROOT's crew."
+  (let ((root (agent-shell-crew--normal-root root)))
+    (seq-filter (lambda (buffer)
+                  (and (buffer-local-value 'agent-shell-crew--member buffer)
+                       (equal (buffer-local-value 'agent-shell-crew--root buffer) root)))
+                (buffer-list))))
+
+(defun agent-shell-crew--stop-blockers (root)
+  "Why stopping ROOT's crew now would lose work, as a list of strings.
+A member mid-turn, at a permission prompt or holding queued messages loses
+them; an item still ACTIVE loses the session that was doing it."
+  (let (reasons)
+    (dolist (buffer (agent-shell-crew--member-buffers root))
+      (let ((name (buffer-local-value 'agent-shell-crew--member buffer))
+            (held (length (map-elt (buffer-local-value 'agent-shell--state buffer) :pending-prompts))))
+        (with-current-buffer buffer
+          (cond ((eq (condition-case nil (agent-shell-status :shell-buffer buffer) (error nil)) 'blocked)
+                 (push (format "%s is at a permission prompt" name) reasons))
+                ((shell-maker-busy) (push (format "%s is working" name) reasons))))
+        (when (> held 0)
+          (push (format "%s has %d queued message%s" name held (if (= held 1) "" "s")) reasons))))
+    (dolist (item (agent-shell-crew-queue-list root))
+      (when (and (equal (plist-get item :state) "ACTIVE")
+                 (not (equal (plist-get item :owner) "human")))
+        (push (format "%s is ACTIVE for %s" (plist-get item :id) (plist-get item :owner)) reasons)))
+    (nreverse reasons)))
+
+;;;###autoload
+(defun agent-shell-crew-stop (root &optional force)
+  "Stop every member session of the crew at ROOT; return how many stopped.
+Refuses while stopping would lose work -- a member working, at a prompt or
+holding messages, or an item still ACTIVE -- and says which.  FORCE, the
+prefix argument, stops anyway.  The queue is untouched: a restarted crew
+picks up where its items say."
+  (interactive (list (agent-shell-crew--read-root "Stop crew: ") current-prefix-arg))
+  (let ((blockers (agent-shell-crew--stop-blockers root))
+        (buffers (agent-shell-crew--member-buffers root)))
+    (when (and blockers (not force))
+      (user-error "Not stopping the crew: %s (C-u to stop anyway)" (string-join blockers "; ")))
+    (let ((kill-buffer-query-functions nil))
+      (dolist (buffer buffers)
+        (with-current-buffer buffer (set-buffer-modified-p nil))
+        (kill-buffer buffer)))
+    (run-hook-with-args 'agent-shell-crew-session-changed-hook (agent-shell-crew--normal-root root))
+    (when (called-interactively-p 'interactive)
+      (message "Stopped %d crew member%s" (length buffers) (if (= (length buffers) 1) "" "s")))
+    (length buffers)))
+
+;;;###autoload
+(defun agent-shell-crew-restart-profile (name &optional force)
+  "Stop the crew of profile NAME, then start it again.
+For after a change members only see at startup: a brief, the MCP tool's
+schema, or a member's directory.  Refuses as `agent-shell-crew-stop' does,
+unless FORCE (the prefix argument)."
+  (interactive
+   (list (completing-read "Restart crew profile: " (mapcar #'car agent-shell-crew-profiles) nil t)
+         current-prefix-arg))
+  (let* ((profile (or (assoc name agent-shell-crew-profiles)
+                      (user-error "No crew profile named %s" name)))
+         (root (or (plist-get (cdr profile) :root)
+                   (user-error "Crew profile %s has no :root" name))))
+    (agent-shell-crew-stop root force)
+    (agent-shell-crew-start-profile name)))
+
 ;;;###autoload
 (defun agent-shell-crew-start-profile (name)
   "Start every member of crew profile NAME that is not already running.
