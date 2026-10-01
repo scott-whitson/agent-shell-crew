@@ -143,6 +143,18 @@
         (should (string-match-p "note by owner@x: looked at it" (nth 1 log)))
         (should (string-match-p "note by human: fine by me" (nth 2 log)))))))
 
+(ert-deftest crew-queue-reparking-replaces-a-stale-question ()
+  "Bundle 0928, 2026-10-01: rebuilt after it parked, and the prompt kept the old question."
+  (crew-test--with-project root
+    (let ((id (agent-shell-crew-queue-create root "human" :title "T" :owner "owner@x")))
+      (agent-shell-crew-queue-claim root "owner@x" id)
+      (agent-shell-crew-queue-park root "owner@x" id "Old: (1) you push; (2) widen the rule")
+      (agent-shell-crew-queue-park root "owner@x" id "Rebuilt: (1) merge and push; (2) send back")
+      (let ((item (agent-shell-crew-queue-get root id)))
+        (should (equal (plist-get item :state) "PARKED"))
+        (should (equal (plist-get item :question) "Rebuilt: (1) merge and push; (2) send back"))
+        (should (string-match-p "re-parked on human by owner@x" (car (last (plist-get item :log)))))))))
+
 (ert-deftest crew-queue-park-and-decide ()
   (crew-test--with-project root
     (let ((id (crew-test--new root)))

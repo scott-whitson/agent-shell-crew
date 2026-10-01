@@ -542,13 +542,21 @@ so text that matches no option was never reachable without it.")
 
 (defun agent-shell-crew--options (question)
   "Return the numbered options written inline in QUESTION.
-Options look like \"(1) first; (2) second\"."
-  (let ((start 0) options)
-    (while (string-match
-            "(\\([0-9]+\\))[ \t]*\\(.+?\\)[ \t]*\\(?:;\\|\\. \\|(\\([0-9]+\\))\\|\\.?\\'\\)"
-            question start)
-      (push (format "%s — %s" (match-string 1 question) (match-string 2 question)) options)
-      (setq start (if (match-beginning 3) (1- (match-beginning 3)) (match-end 0))))
+Options look like \"(1) first; (2) second\".  Only the LAST list counts:
+it starts at the last \"(1)\" and runs while the numbers go up by one.
+A \"(1)\" earlier in the text -- \"Decision (1) is recorded, so ...\" --
+is prose, and reading it as an option recorded the wrong answer once."
+  (let ((start nil) (pos 0) (want 1) options)
+    (while (string-match "(1)" question pos)
+      (setq start (match-beginning 0) pos (match-end 0)))
+    (when start
+      (while (and (string-match
+                   "(\\([0-9]+\\))[ \t]*\\(.+?\\)[ \t]*\\(?:;\\|\\. \\|(\\([0-9]+\\))\\|\\.?\\'\\)"
+                   question start)
+                  (= (string-to-number (match-string 1 question)) want))
+        (push (format "%s — %s" (match-string 1 question) (match-string 2 question)) options)
+        (setq want (1+ want)
+              start (if (match-beginning 3) (1- (match-beginning 3)) (match-end 0)))))
     (nreverse options)))
 
 ;;;###autoload

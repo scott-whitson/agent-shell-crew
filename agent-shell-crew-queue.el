@@ -350,17 +350,21 @@ Only the owner or the human may."
 (defun agent-shell-crew-queue-park (root actor id question &optional evidence status)
   "ACTOR parks item ID in ROOT's queue on the human with QUESTION.
 EVIDENCE, when non-blank, replaces the item's evidence.  STATUS is as for
-`agent-shell-crew--put-outcome'."
+`agent-shell-crew--put-outcome'.  Parking an item that is already parked
+replaces its question: once the situation changes the old question is a
+wrong question, and a note under it is not what the decision prompt shows."
   (when (agent-shell-crew--blank-p question) (agent-shell-crew--fail "Parking needs a question"))
   (agent-shell-crew--mutate root id 'park
     (agent-shell-crew--require-owner actor)
-    (agent-shell-crew--require-state "ACTIVE")
-    (org-entry-put nil "QUESTION" (agent-shell-crew--clean-line question))
-    (agent-shell-crew--put-outcome status nil)
-    (unless (agent-shell-crew--blank-p evidence)
-      (org-entry-put nil "EVIDENCE" (agent-shell-crew--clean-line evidence)))
-    (agent-shell-crew--set-state "PARKED")
-    (agent-shell-crew--log "parked on human by %s: %s" actor (agent-shell-crew--clean-line question))))
+    (agent-shell-crew--require-state "ACTIVE" "PARKED")
+    (let ((reparked (equal (org-get-todo-state) "PARKED")))
+      (org-entry-put nil "QUESTION" (agent-shell-crew--clean-line question))
+      (agent-shell-crew--put-outcome status nil)
+      (unless (agent-shell-crew--blank-p evidence)
+        (org-entry-put nil "EVIDENCE" (agent-shell-crew--clean-line evidence)))
+      (agent-shell-crew--set-state "PARKED")
+      (agent-shell-crew--log "%s by %s: %s" (if reparked "re-parked on human" "parked on human")
+                             actor (agent-shell-crew--clean-line question)))))
 
 (defun agent-shell-crew-queue-decide (root id decision)
   "Record the human's DECISION on parked item ID in ROOT's queue.

@@ -120,6 +120,14 @@
   (should (equal (agent-shell-crew--options "(1) yes (2) no") '("1 — yes" "2 — no")))
   (should (null (agent-shell-crew--options "Should it?"))))
 
+(ert-deftest crew-options-only-the-last-list-counts ()
+  "The lead's slate of 2026-10-01: a preamble's \"(1)\" was taken as option 1."
+  (should (equal (agent-shell-crew--options
+                  "Decision (1) is recorded, so: (1) copy the drafts; (2) add an allow rule")
+                 '("1 — copy the drafts" "2 — add an allow rule")))
+  (should (equal (agent-shell-crew--options "Steps (1), (3) done. (1) ship; (2) hold")
+                 '("1 — ship" "2 — hold"))))
+
 (ert-deftest crew-new-creates-and-nudges ()
   (crew-main-test--with root
     (let ((told nil))

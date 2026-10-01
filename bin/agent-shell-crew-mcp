@@ -45,8 +45,10 @@ TOOLS = [
           "it closes, such as `deployed` or `live-checked`, with the evidence. Works on a "
           "closed item.", {"id": S, "stage": S, "evidence": S, "status": STATUS},
           ["id", "stage", "evidence"]),
-    _tool("crew_park", "Park your item on the human with a question. Write options inline as "
-          "`(1) ...; (2) ...` and point `evidence` at a file the human should read.",
+    _tool("crew_park", "Park your item on the human with a question. End the question with its "
+          "options, written `(1) ...; (2) ...`, and keep other numbers in parentheses out of "
+          "it. Point `evidence` at a file the human should read. Call it again on an item "
+          "that is already parked to REPLACE a question the situation has made stale.",
           {"id": S, "question": S, "evidence": S, "status": STATUS}, ["id", "question"]),
     _tool("crew_done", "Close your item as DONE, or CANCELED when `canceled` is true.",
           {"id": S, "reason": S, "canceled": {"type": "boolean"}, "status": STATUS,
