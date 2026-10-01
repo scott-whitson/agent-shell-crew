@@ -500,6 +500,11 @@ session."
          (running (seq-filter (lambda (m) (agent-shell-crew--member-buffer m root)) members)))
     (append running (seq-difference members running))))
 
+(defconst agent-shell-crew--type-own "Type my own decision…"
+  "The choice that opens a free-text prompt in place of a listed option.
+A completion UI such as vertico submits the highlighted candidate on RET,
+so text that matches no option was never reachable without it.")
+
 (defun agent-shell-crew--options (question)
   "Return the numbered options written inline in QUESTION.
 Options look like \"(1) first; (2) second\"."
@@ -564,8 +569,15 @@ tells the owner."
       (let ((file (expand-file-name evidence root)))
         (when (file-readable-p file)
           (display-buffer (find-file-noselect file) '(nil (inhibit-same-window . t))))))
-    (let ((decision (string-trim (completing-read (format "%s\nDecision: " question)
-                                                  (agent-shell-crew--options question)))))
+    (let* ((options (agent-shell-crew--options question))
+           (picked (completing-read (format "%s\nDecision: " question)
+                                    (if options
+                                        (append options (list agent-shell-crew--type-own))
+                                      options)))
+           (decision (string-trim
+                      (if (equal picked agent-shell-crew--type-own)
+                          (read-string (format "%s\nYour decision: " question))
+                        picked))))
       (when (string-empty-p decision) (user-error "No decision given; nothing recorded"))
       (let ((owner (agent-shell-crew-queue-decide root id decision)))
         (agent-shell-crew--notify

@@ -139,13 +139,30 @@
       (agent-shell-crew-queue-park root "owner@my-app" id "Pick (1) a; (2) b")
       (cl-letf (((symbol-function 'agent-shell-crew--notify) (lambda (m _r tx) (push (list m tx) told)))
                 ((symbol-function 'completing-read)
-                 (lambda (_p coll &rest _) (if (equal coll '("1 — a" "2 — b")) "1 — a" (car coll)))))
+                 (lambda (_p coll &rest _) (if (member "1 — a" coll) "1 — a" (car coll)))))
         (agent-shell-crew-decide))
       (let ((item (agent-shell-crew-queue-get root id)))
         (should (equal (plist-get item :state) "ACTIVE"))
         (should (equal (plist-get item :decision) "1 — a")))
       (should (equal (car (car told)) "owner@my-app"))
       (should (string-match-p "1 — a" (nth 1 (car told)))))))
+
+(ert-deftest crew-decide-offers-a-typed-decision-beside-the-options ()
+  "Approving an option the owner cannot carry out needs words of your own."
+  (crew-main-test--with root
+    (let* ((id (agent-shell-crew-queue-create root "human" :title "T" :owner "owner@my-app"))
+           (offered nil))
+      (agent-shell-crew-queue-claim root "owner@my-app" id)
+      (agent-shell-crew-queue-park root "owner@my-app" id "Pick (1) merge; (2) send back")
+      (cl-letf (((symbol-function 'agent-shell-crew--notify) #'ignore)
+                ((symbol-function 'completing-read)
+                 (lambda (_p coll &rest _) (setq offered coll) agent-shell-crew--type-own))
+                ((symbol-function 'read-string)
+                 (lambda (&rest _) "  1, and you may push it yourself  ")))
+        (agent-shell-crew-decide))
+      (should (equal (car (last offered)) agent-shell-crew--type-own))
+      (should (equal (plist-get (agent-shell-crew-queue-get root id) :decision)
+                     "1, and you may push it yourself")))))
 
 (ert-deftest crew-decide-owner-not-running ()
   (crew-main-test--with root
