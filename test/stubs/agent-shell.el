@@ -46,5 +46,11 @@
 (cl-defun agent-shell-status (&key shell-buffer)
   "Stub: the buffer's `agent-shell-test--status', default `ready'."
   (or (buffer-local-value 'agent-shell-test--status (or shell-buffer (current-buffer))) 'ready))
+(defun agent-shell-interrupt (&optional force)
+  "Stub: record the interrupt."
+  (push (list 'interrupt force (current-buffer)) agent-shell-test--calls))
+(defun agent-shell-prompt-queue-resume ()
+  "Stub: record the resume."
+  (push (list 'resume (current-buffer)) agent-shell-test--calls))
 (provide 'agent-shell)
 ;;; agent-shell.el ends here

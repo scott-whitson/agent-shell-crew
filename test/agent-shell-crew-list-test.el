@@ -253,7 +253,7 @@
     (let ((agent-shell-test--busy t)
           (agent-shell-crew--warned nil)
           (warnings 0))
-      (cl-letf (((symbol-function 'display-warning) (lambda (&rest _) (cl-incf warnings))))
+      (cl-letf (((symbol-function 'agent-shell-crew--say) (lambda (&rest _) (cl-incf warnings))))
         (agent-shell-crew--watch)
         (agent-shell-crew--watch)
         (should (= warnings 1))
@@ -262,5 +262,61 @@
         (crew-list-test--quiet root "owner@my-app" 30)
         (agent-shell-crew--watch)
         (should (= warnings 2))))))
+
+;;; Recovering a stuck member
+
+(defun crew-list-test--recover-calls ()
+  "The interrupt and resume calls the stub recorded."
+  (seq-filter (lambda (c) (memq (car c) '(interrupt resume))) agent-shell-test--calls))
+
+(ert-deftest crew-recover-interrupts-a-busy-silent-member-with-messages ()
+  "The gate, 2026-09-30 22:10 to 07:49: busy, silent, a decision waiting."
+  (crew-list-test--with root
+    (agent-shell-crew-start root '("owner"))
+    (crew-list-test--quiet root "owner@my-app" 30 '("Decision: merge"))
+    (let ((agent-shell-test--busy t) (agent-shell-crew-auto-recover t)
+          (agent-shell-crew--warned nil) (said nil))
+      (cl-letf (((symbol-function 'agent-shell-crew--say) (lambda (tx) (push tx said))))
+        (agent-shell-crew--watch))
+      (should (equal (mapcar #'car (crew-list-test--recover-calls)) '(interrupt)))
+      (should (string-match-p "owner@my-app was stuck .*; interrupted it" (car said))))))
+
+(ert-deftest crew-recover-resumes-a-paused-queue ()
+  (crew-list-test--with root
+    (agent-shell-crew-start root '("owner"))
+    (crew-list-test--quiet root "owner@my-app" 3 '("a" "b"))
+    (let ((agent-shell-test--busy nil) (agent-shell-crew-auto-recover t) (agent-shell-crew--warned nil))
+      (cl-letf (((symbol-function 'agent-shell-crew--say) #'ignore))
+        (agent-shell-crew--watch))
+      (should (equal (mapcar #'car (crew-list-test--recover-calls)) '(resume))))))
+
+(ert-deftest crew-recover-leaves-a-member-at-a-permission-prompt-alone ()
+  "An interrupt rejects the prompt, which is a decision that belongs to the human."
+  (crew-list-test--with root
+    (agent-shell-crew-start root '("owner"))
+    (crew-list-test--status root "owner@my-app" 'blocked)
+    (crew-list-test--quiet root "owner@my-app" 30 '("a"))
+    (let ((agent-shell-test--busy t) (agent-shell-crew-auto-recover t) (agent-shell-crew--warned nil))
+      (cl-letf (((symbol-function 'agent-shell-crew--say) #'ignore))
+        (agent-shell-crew--watch))
+      (should-not (crew-list-test--recover-calls)))))
+
+(ert-deftest crew-recover-needs-messages-waiting ()
+  (crew-list-test--with root
+    (agent-shell-crew-start root '("owner"))
+    (crew-list-test--quiet root "owner@my-app" 30)
+    (let ((agent-shell-test--busy t) (agent-shell-crew-auto-recover t) (agent-shell-crew--warned nil))
+      (cl-letf (((symbol-function 'agent-shell-crew--say) #'ignore))
+        (agent-shell-crew--watch))
+      (should-not (crew-list-test--recover-calls)))))
+
+(ert-deftest crew-recover-is-off-by-default ()
+  (crew-list-test--with root
+    (agent-shell-crew-start root '("owner"))
+    (crew-list-test--quiet root "owner@my-app" 30 '("a"))
+    (let ((agent-shell-test--busy t) (agent-shell-crew--warned nil))
+      (cl-letf (((symbol-function 'agent-shell-crew--say) #'ignore))
+        (agent-shell-crew--watch))
+      (should-not (crew-list-test--recover-calls)))))
 
 ;;; agent-shell-crew-list-test.el ends here

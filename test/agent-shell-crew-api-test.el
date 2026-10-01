@@ -12,7 +12,8 @@
 (ert-deftest crew-api-functions-exist ()
   (dolist (fn '(agent-shell-start agent-shell-insert agent-shell-busy-submit-queue
                 agent-shell-subscribe-to agent-shell-buffers shell-maker-busy
-                agent-shell-anthropic-make-claude-code-config))
+                agent-shell-anthropic-make-claude-code-config
+                agent-shell-interrupt agent-shell-prompt-queue-resume))
     (should (fboundp fn))))
 
 (ert-deftest crew-api-events-documented ()

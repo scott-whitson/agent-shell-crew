@@ -287,19 +287,54 @@ M-x agent-shell-prompt-queue-resume in its buffer"
 (defvar agent-shell-crew--warned nil
   "Member buffers already warned about for their current stuck episode.")
 
+(defcustom agent-shell-crew-auto-recover nil
+  "When non-nil, `agent-shell-crew-watch-mode' recovers a stuck member itself.
+Only a member with messages waiting: one that reads busy and silent past
+`agent-shell-crew-stall-minutes' is interrupted, and one left idle with a
+paused queue has the queue resumed.  A member waiting at a permission
+prompt is never touched, because an interrupt rejects the prompt.  It can
+still interrupt a member genuinely silent in a long step, which is why it
+needs messages waiting and why it is off by default."
+  :type 'boolean
+  :group 'agent-shell-crew)
+
+(defun agent-shell-crew--recover (buffer)
+  "Unstick the member session in BUFFER; return what was done, or nil."
+  (with-current-buffer buffer
+    (let ((held (length (map-elt agent-shell--state :pending-prompts))))
+      (cond
+       ((zerop held) nil)
+       ((eq (condition-case nil (agent-shell-status :shell-buffer buffer) (error nil)) 'blocked)
+        nil)
+       ((shell-maker-busy)
+        (agent-shell-interrupt t)
+        "interrupted it; its queue resumes on the next check")
+       (t
+        (agent-shell-prompt-queue-resume)
+        (format "resumed its queue (%d message%s)" held (if (= held 1) "" "s")))))))
+
+(defun agent-shell-crew--say (text)
+  "Tell the human TEXT where they will see it: a warning and the echo area."
+  (display-warning 'agent-shell-crew text :warning)
+  (message "%s" text))
+
 (defun agent-shell-crew--watch ()
-  "Warn once about each member that has become stuck."
+  "Warn once about each member that has become stuck, recovering it if allowed."
   (dolist (buffer (buffer-list))
     (when (buffer-local-value 'agent-shell-crew--member buffer)
-      (let ((why (agent-shell-crew--member-stuck buffer)))
+      (let ((why (agent-shell-crew--member-stuck buffer))
+            (name (buffer-local-value 'agent-shell-crew--member buffer)))
         (cond
-         ((and why (not (memq buffer agent-shell-crew--warned)))
-          (push buffer agent-shell-crew--warned)
-          (display-warning 'agent-shell-crew
-                           (format "%s looks stuck: %s"
-                                   (buffer-local-value 'agent-shell-crew--member buffer) why)
-                           :warning))
-         ((not why)
+         (why
+          (let ((done (and agent-shell-crew-auto-recover
+                           (condition-case err (agent-shell-crew--recover buffer)
+                             (error (format "recovery failed: %s" (error-message-string err)))))))
+            (cond
+             (done (agent-shell-crew--say (format "%s was stuck (%s); %s" name why done)))
+             ((not (memq buffer agent-shell-crew--warned))
+              (push buffer agent-shell-crew--warned)
+              (agent-shell-crew--say (format "%s looks stuck: %s" name why))))))
+         (t
           (setq agent-shell-crew--warned (delq buffer agent-shell-crew--warned)))))))
   (setq agent-shell-crew--warned (seq-filter #'buffer-live-p agent-shell-crew--warned)))
 
