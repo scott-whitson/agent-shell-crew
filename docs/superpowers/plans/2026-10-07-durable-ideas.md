@@ -108,7 +108,12 @@ The human-facing text (park questions, evidence files, the board's status
 sentence) stays plain prose. The package documents the format in
 `briefs/*.md` and changes no code for it.
 
-## Later, not in this plan
+## Built later the same day (follow-up)
+
+- **Usage per item:** `:COST:` from agent-shell's session cost, recorded at each close; a Cost column on the board.
+- **Steering:** agent-shell supports it (`agent-shell-prompt-steer`); cancel notices and `urgent` items are steered.
+
+## Originally deferred
 
 - **Usage per item on the board** (Pi: `pi.usage`): tokens per member and per
   item, from agent-shell's usage events if it exposes them, else from the

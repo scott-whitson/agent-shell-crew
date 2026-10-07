@@ -302,6 +302,28 @@ boundary, so a restart (or a usage-limit cut-off) resumes from the last
 phase instead of re-reading a transcript. Off by default; a lead that keeps
 context across items should leave it off.
 
+## Urgent messages: steering
+
+A nudge normally waits for the member's turn to end. On 2026-10-07 a rule
+change reached two members only after they had built what it forbade. A
+cancel notice ("Crew item X was canceled ... Stop work on it.") and a
+`crew_create` with `urgent: true` are **steered** into the running turn
+instead (`agent-shell-prompt-steer`), when the agent supports steering, the
+session is busy and ready, and it is not waiting on a permission answer.
+Anything else, or a steer that errors, falls back to the ordinary queue.
+Kept to messages where stopping is the point: an agent that declines a
+steer has its turn interrupted.
+
+## What each item cost
+
+agent-shell keeps each session's running cost (`:usage :cost-amount`).
+When a member closes or hands off an item, the crew records on that item
+what the session spent since the member's previous close: `:COST:` (added
+to, so a reopened chain sums) and a log line "usage: 1.23, context 46k".
+The board's Cost column sums a piece of work's items. With a fresh context
+per item the figure is the item's own; without it, it is the spend between
+two closes.
+
 ## Health, stuck members and recovery
 
 One dot answers "is the crew all right?" without opening anything: red

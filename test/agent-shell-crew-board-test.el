@@ -261,19 +261,28 @@
 
 (ert-deftest crew-board-columns-include-each-stage ()
   (should (equal (mapcar #'car (agent-shell-crew-board--format '((:name "deployed") (:name "accepted"))))
-                 '("Ref" "State" "deployed" "accepted" "Title" "Status"))))
+                 '("Ref" "State" "Cost" "deployed" "accepted" "Title" "Status"))))
 
-(ert-deftest crew-board-columns-without-stages-are-four ()
+(ert-deftest crew-board-columns-without-stages-are-five ()
   (should (equal (mapcar #'car (agent-shell-crew-board--format nil))
-                 '("Ref" "State" "Title" "Status"))))
+                 '("Ref" "State" "Cost" "Title" "Status"))))
 
 (ert-deftest crew-board-columns-fit-what-they-hold ()
   (let* ((rows (list (list :ref "48" :title "The agent sees the whole conversation")
                      (list :ref "flaky-via-ctx" :title "A flaky test")))
          (fmt (agent-shell-crew-board--format nil rows 95)))
     (should (= (nth 1 (aref fmt 0)) 8))           ; Ref: capped at 8
-    (should (<= (nth 1 (aref fmt 2)) (floor (* 0.45 (- 95 8 1 9)))))
-    (should (= (nth 1 (aref fmt 3)) 0))))         ; Status takes the rest
+    (should (<= (nth 1 (aref fmt 3)) (floor (* 0.45 (- 95 8 1 9 7)))))
+    (should (= (nth 1 (aref fmt 4)) 0))))         ; Status takes the rest
+
+(ert-deftest crew-board-row-cost-sums-its-items ()
+  (let ((rows (agent-shell-crew-board--rows
+               nil (list (list :id "a" :ref "48" :title "T" :cost 1.25 :log nil)
+                         (list :id "b" :ref "48" :title "Review" :cost 0.5 :log nil)
+                         (list :id "c" :ref "49" :title "U" :log nil)))))
+    (should (= (plist-get (car (seq-filter (lambda (r) (equal (plist-get r :ref) "48")) rows)) :cost)
+               1.75))
+    (should-not (plist-get (car (seq-filter (lambda (r) (equal (plist-get r :ref) "49")) rows)) :cost))))
 
 (ert-deftest crew-board-finished-merged-work-reads-merged ()
   (should (equal (agent-shell-crew-board--state-label '(:state "DONE") '(yes)) "MERGED"))

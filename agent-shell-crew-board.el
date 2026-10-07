@@ -213,6 +213,8 @@ ITEMS, when given, is ROOT's queue as already read."
                :id (plist-get latest :id)
                :branch (seq-some (lambda (i) (plist-get i :branch)) (reverse members))
                :status status
+               :cost (let ((costs (delq nil (mapcar (lambda (i) (plist-get i :cost)) members))))
+                       (and costs (apply #'+ costs)))
                :recorded recorded
                :fallback (and (not status) (agent-shell-crew-board--event-text latest)))))
      order)))
@@ -305,7 +307,8 @@ fact a Merged column used to spend seven characters on."
     (list row
           (vconcat
            (vector (or (plist-get row :ref) "")
-                   (propertize label 'face (agent-shell-crew-board--state-face label)))
+                   (propertize label 'face (agent-shell-crew-board--state-face label))
+                   (if-let* ((cost (plist-get row :cost))) (format "%.2f" cost) ""))
            (mapcar #'agent-shell-crew-board--mark (cdr progress))
            (vector (or (plist-get row :title) "")
                    (if (plist-get row :status)
@@ -382,9 +385,9 @@ WIDTH defaults to 100."
          (ref (funcall longest :ref 3 8))
          (marks (mapcar (lambda (st) (let ((n (plist-get st :name))) (list n (1+ (length n)) t)))
                         stages))
-         (used (+ ref 1 9 (apply #'+ (mapcar #'cadr marks))))
+         (used (+ ref 1 9 7 (apply #'+ (mapcar #'cadr marks))))
          (title (min (funcall longest :title 10 200) (max 20 (floor (* 0.45 (- width used)))))))
-    (vconcat (vector (list "Ref" ref t) (list "State" 8 t))
+    (vconcat (vector (list "Ref" ref t) (list "State" 8 t) (list "Cost" 6 t))
              marks
              (vector (list "Title" title t) (list "Status" 0 nil)))))
 

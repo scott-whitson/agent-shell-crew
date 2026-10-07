@@ -269,6 +269,7 @@ this call; see `agent-shell-crew-queue-find-request'."
           :status (org-entry-get nil "STATUS")
           :branch (org-entry-get nil "BRANCH")
           :checkpoint (org-entry-get nil "CHECKPOINT")
+          :cost (when-let* ((c (org-entry-get nil "COST"))) (string-to-number c))
           :question (org-entry-get nil "QUESTION")
           :decision (org-entry-get nil "DECISION")
           :brief (string-trim (buffer-substring-no-properties
@@ -389,6 +390,17 @@ checkpoint and is logged, so a member restarted with a fresh context
     (agent-shell-crew--require-owner actor)
     (org-entry-put nil "CHECKPOINT" (agent-shell-crew--clean-line text))
     (agent-shell-crew--log "checkpoint by %s: %s" actor (agent-shell-crew--clean-line text))))
+
+(defun agent-shell-crew-queue-record-usage (root id cost &optional context)
+  "Add COST, in the agent's currency, to item ID's `:COST:' in ROOT's queue.
+CONTEXT, when a number, is the session's context size in tokens at the
+time, and is logged.  Written by the crew itself, not on any member's
+behalf, so it works on a closed item and needs no owner."
+  (agent-shell-crew--mutate root id 'usage
+    (let ((total (+ cost (string-to-number (or (org-entry-get nil "COST") "0")))))
+      (org-entry-put nil "COST" (format "%.2f" total)))
+    (agent-shell-crew--log "usage: %.2f%s" cost
+                           (if (numberp context) (format ", context %dk" (round context 1000)) ""))))
 
 (defun agent-shell-crew-queue-park (root actor id question &optional evidence status)
   "ACTOR parks item ID in ROOT's queue on the human with QUESTION.

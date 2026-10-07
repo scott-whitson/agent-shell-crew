@@ -13,7 +13,8 @@
   (dolist (fn '(agent-shell-start agent-shell-insert agent-shell-busy-submit-queue
                 agent-shell-subscribe-to agent-shell-buffers shell-maker-busy
                 agent-shell-anthropic-make-claude-code-config
-                agent-shell-interrupt agent-shell-prompt-queue-resume))
+                agent-shell-interrupt agent-shell-prompt-queue-resume
+                agent-shell-prompt-steer agent-shell-steering-supported-p))
     (should (fboundp fn))))
 
 (ert-deftest crew-api-events-documented ()

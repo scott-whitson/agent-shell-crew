@@ -608,4 +608,54 @@
                               'agent-shell-crew--spec (agent-shell-crew--member-buffer "check-1@my-app" root))
                              :fresh)))))
 
+;;; Steering and usage per item (2026-10-07)
+
+(defmacro crew-steer-test--with (buffer &rest body)
+  "A ready member BUFFER with clean stub state, for BODY."
+  (declare (indent 1))
+  `(with-temp-buffer
+     (let ((,buffer (current-buffer))
+           (agent-shell-test--calls nil) (agent-shell-test--busy t)
+           (agent-shell-test--steering t) (agent-shell-test--steer-fails nil))
+       (setq agent-shell-crew--ready t)
+       ,@body)))
+
+(ert-deftest crew-urgent-text-is-steered-into-a-running-turn ()
+  (crew-steer-test--with b
+    (agent-shell-crew--deliver b "stop" t)
+    (should (equal (car agent-shell-test--calls) (list 'steer "stop" b)))))
+
+(ert-deftest crew-ordinary-text-still-queues-behind-the-turn ()
+  (crew-steer-test--with b
+    (agent-shell-crew--deliver b "new item")
+    (should (eq (car (car agent-shell-test--calls)) 'queue))))
+
+(ert-deftest crew-urgent-falls-back-to-queueing-when-it-cannot-steer ()
+  (crew-steer-test--with b
+    (let ((agent-shell-test--steering nil))
+      (agent-shell-crew--deliver b "stop" t)
+      (should (eq (car (car agent-shell-test--calls)) 'queue)))
+    (setq agent-shell-test--calls nil)
+    (setq agent-shell-test--status 'blocked)
+    (agent-shell-crew--deliver b "stop" t)
+    (should (eq (car (car agent-shell-test--calls)) 'queue))
+    (setq agent-shell-test--calls nil agent-shell-test--status nil agent-shell-test--steer-fails t)
+    (agent-shell-crew--deliver b "stop" t)
+    (should (eq (car (car agent-shell-test--calls)) 'queue))))
+
+(ert-deftest crew-closing-an-item-records-what-the-session-spent-since-last-time ()
+  (crew-fresh-test--with root
+    (let ((member (agent-shell-crew--start-member root "owner" :socket "/s"))
+          (a (agent-shell-crew-queue-create root "human" :title "A" :owner "owner@my-app"))
+          (b (agent-shell-crew-queue-create root "human" :title "B" :owner "owner@my-app")))
+      (with-current-buffer member
+        (setq agent-shell--state (list (cons :usage (list (cons :cost-amount 1.5)
+                                                          (cons :context-used 46000))))))
+      (agent-shell-crew--item-closed "owner@my-app" root a)
+      (with-current-buffer member
+        (setf (alist-get :cost-amount (alist-get :usage agent-shell--state)) 2.25))
+      (agent-shell-crew--item-closed "owner@my-app" root b)
+      (should (= (plist-get (agent-shell-crew-queue-get root a) :cost) 1.5))
+      (should (= (plist-get (agent-shell-crew-queue-get root b) :cost) 0.75)))))
+
 ;;; agent-shell-crew-test.el ends here

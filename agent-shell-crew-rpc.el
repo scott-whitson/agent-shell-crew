@@ -41,14 +41,16 @@ Nil means nobody is told; items still wait in the queue.")
 Nil accepts any name.")
 
 (defvar agent-shell-crew-rpc-closed-function nil
-  "Function called with ACTOR and ROOT after ACTOR closes or hands off an item.
-Nil does nothing.  The session side uses it to give a member a fresh
-context once its turn ends; see `agent-shell-crew--fresh-due'.")
+  "Function called with ACTOR, ROOT and ID after ACTOR closes or hands off ID.
+Nil does nothing.  The session side records what the item cost and gives
+the member a fresh context; see `agent-shell-crew--item-closed'.")
 
-(defun agent-shell-crew--rpc-closed (actor root)
-  "Run `agent-shell-crew-rpc-closed-function' for ACTOR and ROOT.  Never signals."
+(defun agent-shell-crew--rpc-closed (actor root id)
+  "Run `agent-shell-crew-rpc-closed-function' for ACTOR, ROOT and ID.
+Never signals."
   (when agent-shell-crew-rpc-closed-function
-    (condition-case nil (funcall agent-shell-crew-rpc-closed-function actor root) (error nil))))
+    (condition-case nil (funcall agent-shell-crew-rpc-closed-function actor root id)
+      (error nil))))
 
 (defun agent-shell-crew--rpc-encode (object)
   "Return OBJECT as base64-encoded JSON."
@@ -91,11 +93,14 @@ context once its turn ends; see `agent-shell-crew--fresh-due'.")
         (agent-shell-crew--fail "%s is not a member of this crew (members: %s)"
                                 name (string-join members ", "))))))
 
-(defun agent-shell-crew--rpc-notify (member root text)
-  "Tell MEMBER of ROOT's crew TEXT, unless MEMBER is the human."
+(defun agent-shell-crew--rpc-notify (member root text &optional urgent)
+  "Tell MEMBER of ROOT's crew TEXT, unless MEMBER is the human.
+URGENT non-nil asks for the text to be steered into a running turn."
   (when (and agent-shell-crew-rpc-notify-function (not (equal member "human")))
     (condition-case nil
-        (funcall agent-shell-crew-rpc-notify-function member root text)
+        (if urgent
+            (funcall agent-shell-crew-rpc-notify-function member root text t)
+          (funcall agent-shell-crew-rpc-notify-function member root text))
       (error nil))))
 
 (defun agent-shell-crew--rpc-dispatch (actor root verb args)
@@ -119,7 +124,8 @@ context once its turn ends; see `agent-shell-crew--fresh-due'.")
                                                     :status (funcall arg 'status)
                                                     :branch (funcall arg 'branch)
                                                     :request request)))
-             (agent-shell-crew--rpc-notify owner root (agent-shell-crew--nudge-text id title))
+             (agent-shell-crew--rpc-notify owner root (agent-shell-crew--nudge-text id title)
+                                           (eq (funcall arg 'urgent) t))
              `((id . ,id))))))
       ("claim" (agent-shell-crew-queue-claim root actor (funcall arg 'id t)) '((done . t)))
       ("note" (agent-shell-crew-queue-note root actor (funcall arg 'id t) (funcall arg 'text t))
@@ -135,7 +141,7 @@ context once its turn ends; see `agent-shell-crew--fresh-due'.")
                                                        request))
                   (title (plist-get (agent-shell-crew-queue-get root new) :title)))
              (agent-shell-crew--rpc-notify to root (agent-shell-crew--nudge-text new title))
-             (agent-shell-crew--rpc-closed actor root)
+             (agent-shell-crew--rpc-closed actor root (funcall arg 'id t))
              `((id . ,new))))))
       ("checkpoint" (agent-shell-crew-queue-checkpoint root actor (funcall arg 'id t)
                                                        (funcall arg 'text t))
@@ -157,8 +163,10 @@ context once its turn ends; see `agent-shell-crew--fresh-due'.")
          (dolist (lost (cons (cons id owner) cascaded))
            (unless (equal (cdr lost) actor)
              (agent-shell-crew--rpc-notify
-              (cdr lost) root (format "Crew item %s was canceled by %s. Stop work on it." (car lost) actor))))
-         (when (equal owner actor) (agent-shell-crew--rpc-closed actor root))
+              (cdr lost) root
+              (format "Crew item %s was canceled by %s. Stop work on it." (car lost) actor)
+              t)))
+         (when (equal owner actor) (agent-shell-crew--rpc-closed actor root id))
          `((done . t) (canceled_children . ,(vconcat (mapcar #'car cascaded))))))
       (_ (agent-shell-crew--fail "Unknown verb: %s" verb)))))
 

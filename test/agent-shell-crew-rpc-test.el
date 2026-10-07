@@ -14,7 +14,7 @@
                    (make-directory d t) d))
           (crew-rpc-test--notified nil)
           (agent-shell-crew-rpc-notify-function
-           (lambda (m r tx) (push (list m r tx) crew-rpc-test--notified)))
+           (lambda (m r tx &optional urgent) (push (list m r tx urgent) crew-rpc-test--notified)))
           (agent-shell-crew-rpc-members-function
            (lambda (_r) '("human" "owner@my-app" "check@my-app"))))
      (ignore crew-rpc-test--notified)
@@ -204,10 +204,29 @@
 (ert-deftest crew-rpc-closing-tells-the-session-side ()
   (crew-rpc-test--with root
     (let* ((closed nil)
-           (agent-shell-crew-rpc-closed-function (lambda (a r) (push (list a r) closed)))
+           (agent-shell-crew-rpc-closed-function (lambda (a r i) (push (list a r i) closed)))
            (id (crew-rpc-test--create "human" root "owner@my-app")))
       (crew-rpc-test--call "owner@my-app" root "done" `((id . ,id) (reason . "built")))
-      (should (equal closed (list (list "owner@my-app" root)))))))
+      (should (equal closed (list (list "owner@my-app" root id)))))))
+
+(ert-deftest crew-rpc-cancel-notices-are-urgent-new-work-is-not-unless-asked ()
+  (crew-rpc-test--with root
+    (let ((id (crew-rpc-test--create "owner@my-app" root "check@my-app")))
+      (should-not (nth 3 (car crew-rpc-test--notified)))
+      (crew-rpc-test--create "owner@my-app" root "check@my-app" '(urgent . t))
+      (should (eq (nth 3 (car crew-rpc-test--notified)) t))
+      (crew-rpc-test--call "owner@my-app" root "done" `((id . ,id) (reason . "x") (canceled . t)))
+      (should (eq (nth 3 (car crew-rpc-test--notified)) t)))))
+
+(ert-deftest crew-rpc-usage-adds-up-on-the-item ()
+  (crew-rpc-test--with root
+    (let ((id (crew-rpc-test--create "human" root "owner@my-app")))
+      (agent-shell-crew-queue-record-usage root id 1.234 45863)
+      (agent-shell-crew-queue-record-usage root id 0.5)
+      (let ((item (agent-shell-crew-queue-get root id)))
+        (should (= (plist-get item :cost) 1.73))
+        (should (seq-find (lambda (l) (string-match-p "usage: 1.23, context 46k" l))
+                          (plist-get item :log)))))))
 
 (provide 'agent-shell-crew-rpc-test)
 ;;; agent-shell-crew-rpc-test.el ends here

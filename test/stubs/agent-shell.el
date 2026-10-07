@@ -52,5 +52,15 @@
 (defun agent-shell-prompt-queue-resume ()
   "Stub: record the resume."
   (push (list 'resume (current-buffer)) agent-shell-test--calls))
+(defvar agent-shell-test--steering t "What `agent-shell-steering-supported-p' returns.")
+(defvar agent-shell-test--steer-fails nil "Non-nil makes `agent-shell-prompt-steer' signal.")
+(cl-defun agent-shell-steering-supported-p (&key shell-buffer)
+  "Stub."
+  (ignore shell-buffer)
+  agent-shell-test--steering)
+(defun agent-shell-prompt-steer (&optional prompt)
+  "Stub: record PROMPT steered into the current buffer."
+  (when agent-shell-test--steer-fails (user-error "This agent does not support steering"))
+  (push (list 'steer prompt (current-buffer)) agent-shell-test--calls))
 (provide 'agent-shell)
 ;;; agent-shell.el ends here

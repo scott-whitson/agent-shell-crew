@@ -239,9 +239,37 @@ Anything uncertain counts as not empty, so a draft is never submitted."
                        (process-mark (get-buffer-process buffer)) (point-max))))
       (error nil))))
 
-(defun agent-shell-crew--deliver (buffer text)
+(defun agent-shell-crew--steerable-p (buffer)
+  "Non-nil when TEXT can be steered into the turn BUFFER is running.
+Only a ready, busy session whose agent supports steering, and never one
+waiting on a permission answer: a declined steer interrupts the turn,
+which would reject that permission with it."
+  (with-current-buffer buffer
+    (and agent-shell-crew--ready
+         (shell-maker-busy)
+         (fboundp 'agent-shell-prompt-steer)
+         (condition-case nil (agent-shell-steering-supported-p :shell-buffer buffer) (error nil))
+         (not (eq (condition-case nil (agent-shell-status :shell-buffer buffer) (error nil))
+                  'blocked)))))
+
+(defun agent-shell-crew--deliver (buffer text &optional urgent)
   "Send TEXT to the session in BUFFER without disturbing it.
-Held back while the session is starting up."
+Held back while the session is starting up.  URGENT non-nil steers TEXT
+into the turn already running instead of queueing it behind that turn,
+when `agent-shell-crew--steerable-p' allows; otherwise it is delivered
+as usual.  Used for \"stop work on this\": on 2026-10-07 a rule change
+reached two members only after they had built what it forbade.  Steering
+may interrupt the turn if the agent declines it, so it is kept for
+messages where stopping is the point."
+  (if (and urgent (agent-shell-crew--steerable-p buffer)
+           (condition-case nil
+               (progn (with-current-buffer buffer (agent-shell-prompt-steer text)) t)
+             (error nil)))
+      nil
+    (agent-shell-crew--deliver-1 buffer text)))
+
+(defun agent-shell-crew--deliver-1 (buffer text)
+  "Deliver TEXT to BUFFER as a normal nudge."
   (if (buffer-local-value 'agent-shell-crew--ready buffer)
       (agent-shell-crew--send buffer text)
     (with-current-buffer buffer
@@ -427,10 +455,11 @@ Also archives each running crew's long-closed items once a day; see
     (setq agent-shell-crew--watch-timer
           (run-with-timer 60 60 #'agent-shell-crew--watch))))
 
-(defun agent-shell-crew--notify (member root text)
-  "Tell crew MEMBER of the project at ROOT TEXT if its session is running."
+(defun agent-shell-crew--notify (member root text &optional urgent)
+  "Tell crew MEMBER of the project at ROOT TEXT if its session is running.
+URGENT is as for `agent-shell-crew--deliver'."
   (when-let* ((buffer (agent-shell-crew--member-buffer member root)))
-    (agent-shell-crew--deliver buffer text)))
+    (agent-shell-crew--deliver buffer text urgent)))
 
 (defun agent-shell-crew--adopt (buffer member role root &optional brief)
   "Make BUFFER crew MEMBER in ROOT.
@@ -514,6 +543,27 @@ already running."
         buffer))))
 
 ;;; A fresh context per item
+
+(defvar-local agent-shell-crew--cost-baseline 0
+  "The session's cost when this member last closed an item.")
+
+(defun agent-shell-crew--item-closed (member root id)
+  "MEMBER of ROOT's crew closed or handed off item ID.
+Records on ID what the member's session spent since its last close (see
+`agent-shell-crew-queue-record-usage'), then marks the member due a
+fresh context (see `agent-shell-crew--fresh-due')."
+  (when-let* ((buffer (agent-shell-crew--member-buffer member root)))
+    (with-current-buffer buffer
+      (let* ((usage (map-elt (bound-and-true-p agent-shell--state) :usage))
+             (cost (or (map-elt usage :cost-amount) 0))
+             (spent (max 0 (- cost agent-shell-crew--cost-baseline))))
+        (setq agent-shell-crew--cost-baseline cost)
+        (when (> spent 0)
+          (condition-case err
+              (agent-shell-crew-queue-record-usage root id spent (map-elt usage :context-used))
+            (error (message "agent-shell-crew: usage for %s not recorded: %s"
+                            id (error-message-string err))))))))
+  (agent-shell-crew--fresh-due member root))
 
 (defun agent-shell-crew--fresh-due (member root)
   "Note that MEMBER of ROOT's crew closed an item.
@@ -901,7 +951,7 @@ The dot needs `agent-shell-crew-list' loaded; see `agent-shell-crew-health'."
 
 (setq agent-shell-crew-rpc-members-function #'agent-shell-crew-members
       agent-shell-crew-rpc-notify-function #'agent-shell-crew--notify
-      agent-shell-crew-rpc-closed-function #'agent-shell-crew--fresh-due)
+      agent-shell-crew-rpc-closed-function #'agent-shell-crew--item-closed)
 
 (provide 'agent-shell-crew)
 ;;; agent-shell-crew.el ends here
