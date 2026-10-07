@@ -124,12 +124,27 @@ Tools:
 |---|---|
 | `crew_mine`, `crew_list` | Items I own / all items in this project |
 | `crew_show(id)` | One item: brief, properties, log |
-| `crew_create(title, brief, owner, evidence?, ref?)` | New item for any member, or `human` |
+| `crew_create(title, brief, owner, evidence?, ref?, parent?, request_id?)` | New item for any member, or `human` |
 | `crew_claim(id)` | `PENDING → ACTIVE` |
 | `crew_note(id, text)` | Append a log line |
-| `crew_handoff(id, to, summary, brief)` | Close mine as `HANDED`; open a new item for `to` |
+| `crew_handoff(id, to, summary, brief, request_id?)` | Close mine as `HANDED`; open a new item for `to` |
+| `crew_checkpoint(id, text)` | Replace the item's one-line `:CHECKPOINT:`; logged |
 | `crew_park(id, question, evidence)` | `→ PARKED` on `human` |
-| `crew_done(id, reason)` | `→ DONE` or `CANCELED` |
+| `crew_done(id, reason, canceled?)` | `→ DONE` (owner), or `CANCELED` (owner, creator or human), cascading to open children |
+
+**Request ids.** `crew_create` and `crew_handoff` carry a `request_id`; the
+MCP program supplies a UUID when the agent gives none. The same id from the
+same actor returns the first call's item, with no second nudge. On an
+`emacsclient` timeout the program retries those two verbs, and the reads,
+once with the same id: a call that landed but answered late (seen
+2026-10-07) is found, not repeated. Other verbs are not retried.
+`CREW_RPC_TIMEOUT` (seconds, default 30) sets the wait.
+
+**Cancelling owned work.** The creator of an item (its `:FROM:`) and the
+human may cancel it, not only its owner, so a lead can withdraw work it
+slated. A cancel walks `:PARENT:` links and cancels every open item below,
+deepest first, each logged "canceled with parent"; every owner who lost
+work is told. Closed items are never touched.
 
 **Into Emacs.** Each call becomes one `emacsclient` invocation of a single fixed
 function, `agent-shell-crew-rpc`, whose one argument is the request as
@@ -266,6 +281,27 @@ only when nothing waits at a stage the human owns. Stages show; they never
 act: a board with a deploy button is where a project's risk would creep into a
 shared package.
 
+## A fresh context per item
+
+Every model call re-reads its whole session, so a member that has done
+twenty items carries all twenty into the twenty-first. On 2026-10-07 the
+pearl crew re-read 1.47 billion tokens, at 258k to 814k per call; what the
+agents wrote was 0.3% of it.
+
+`:fresh-per-item t`, on a profile or one member (the member's wins), gives a
+member a new session after each item it closes or hands off. When the RPC
+closes an item it marks the member due; at the member's next `turn-complete`
+the crew kills the session and starts it again from the same spec, so the
+new one gets its brief plus, from the intro, the items it still owns with
+their checkpoints. Nudges the old buffer held move across. It waits while
+the member is busy, at a permission prompt, holding a draft or holding
+messages queued in agent-shell, and tries again at the next turn end.
+
+Checkpoints make that safe: a member writes `crew_checkpoint` at each task
+boundary, so a restart (or a usage-limit cut-off) resumes from the last
+phase instead of re-reading a transcript. Off by default; a lead that keeps
+context across items should leave it off.
+
 ## Health, stuck members and recovery
 
 One dot answers "is the crew all right?" without opening anything: red
@@ -347,3 +383,8 @@ five-minute walkthrough, and the settings.
   project is the thing users most object to in orchestrators.
 - **One global queue file.** Rejected: every agent on every machine writing one
   file is where sync conflicts come from.
+- **A durable harness (pi-durable, 2026-10-07).** Its commit-before-show
+  transcript, per-task checkpoints and storage-backed resume are a different
+  layer: agent-shell owns the conversation here. Taken from it instead: reset
+  to a handoff note (fresh context per item), checkpoints, `requestId`
+  de-duplication and bottom-up cancel of owned work.

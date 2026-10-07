@@ -184,11 +184,29 @@ BRANCH is its git branch.  Blank values leave what was there."
   "Non-nil when VALUE is nil or a blank string."
   (or (null value) (and (stringp value) (string-empty-p (string-trim value)))))
 
+(defun agent-shell-crew-queue-find-request (root actor request)
+  "Return the id of the item ACTOR created in ROOT's queue with REQUEST.
+nil when REQUEST is blank or no such item exists.  A call that timed out
+on the way back may still have landed; retried with the same request id,
+it finds that item instead of making a second one."
+  (unless (agent-shell-crew--blank-p request)
+    (agent-shell-crew--with-queue root
+      (let (found)
+        (org-map-entries
+         (lambda ()
+           (when (and (not found)
+                      (equal (org-entry-get nil "REQUEST") request)
+                      (equal (org-entry-get nil "FROM") actor))
+             (setq found (org-entry-get nil "CREW_ID"))))
+         "LEVEL=1")
+        found))))
+
 (cl-defun agent-shell-crew-queue-create (root actor &key title brief owner evidence ref parent
-                                              status branch)
+                                              status branch request)
   "Create an item in ROOT's queue on behalf of ACTOR and return its id.
-TITLE and OWNER are required.  BRIEF, EVIDENCE, REF, PARENT, STATUS and
-BRANCH are optional strings."
+TITLE and OWNER are required.  BRIEF, EVIDENCE, REF, PARENT, STATUS,
+BRANCH and REQUEST are optional strings.  REQUEST is the caller's id for
+this call; see `agent-shell-crew-queue-find-request'."
   (when (agent-shell-crew--blank-p title) (agent-shell-crew--fail "An item needs a title"))
   (when (agent-shell-crew--blank-p owner) (agent-shell-crew--fail "An item needs an owner"))
   (let (id)
@@ -206,6 +224,8 @@ BRANCH are optional strings."
       (org-entry-put nil "OWNER" owner)
       (org-entry-put nil "FROM" actor)
       (unless (agent-shell-crew--blank-p parent) (org-entry-put nil "PARENT" parent))
+      (unless (agent-shell-crew--blank-p request)
+        (org-entry-put nil "REQUEST" (agent-shell-crew--clean-line request)))
       (unless (agent-shell-crew--blank-p evidence)
         (org-entry-put nil "EVIDENCE" (agent-shell-crew--clean-line evidence)))
       (unless (agent-shell-crew--blank-p ref)
@@ -248,6 +268,7 @@ BRANCH are optional strings."
           :ref (org-entry-get nil "REF")
           :status (org-entry-get nil "STATUS")
           :branch (org-entry-get nil "BRANCH")
+          :checkpoint (org-entry-get nil "CHECKPOINT")
           :question (org-entry-get nil "QUESTION")
           :decision (org-entry-get nil "DECISION")
           :brief (string-trim (buffer-substring-no-properties
@@ -358,6 +379,17 @@ Only the owner or the human may."
     (agent-shell-crew--log "branch by %s: %s" actor (agent-shell-crew--clean-line branch))
     (agent-shell-crew--put-outcome nil branch)))
 
+(defun agent-shell-crew-queue-checkpoint (root actor id text)
+  "ACTOR records TEXT as the checkpoint of item ID in ROOT's queue.
+One line: the phase reached and what is next.  It replaces the previous
+checkpoint and is logged, so a member restarted with a fresh context
+\(or after a usage limit) resumes from it.  Owner only."
+  (when (agent-shell-crew--blank-p text) (agent-shell-crew--fail "A checkpoint needs text"))
+  (agent-shell-crew--mutate root id 'checkpoint
+    (agent-shell-crew--require-owner actor)
+    (org-entry-put nil "CHECKPOINT" (agent-shell-crew--clean-line text))
+    (agent-shell-crew--log "checkpoint by %s: %s" actor (agent-shell-crew--clean-line text))))
+
 (defun agent-shell-crew-queue-park (root actor id question &optional evidence status)
   "ACTOR parks item ID in ROOT's queue on the human with QUESTION.
 EVIDENCE, when non-blank, replaces the item's evidence.  STATUS is as for
@@ -388,24 +420,72 @@ Returns the item's owner, who should be told."
     (agent-shell-crew--log "decided by human: %s" (agent-shell-crew--clean-line decision))
     (org-entry-get nil "OWNER")))
 
+(defconst agent-shell-crew--open-states '("PENDING" "ACTIVE" "PARKED")
+  "The states of an item that is not closed.")
+
+(defun agent-shell-crew--open-descendants (id)
+  "The open items below ID by `:PARENT:', deepest first, as (ID . OWNER).
+Read from the current queue buffer."
+  (let (links)
+    (org-map-entries
+     (lambda ()
+       (when-let* ((parent (org-entry-get nil "PARENT")))
+         (push (list parent (org-entry-get nil "CREW_ID") (org-get-todo-state)
+                     (org-entry-get nil "OWNER"))
+               links)))
+     "LEVEL=1")
+    (let ((frontier (list id)) (seen (list id)) (found nil))
+      (while frontier
+        (let ((next nil))
+          (dolist (link links)
+            (when (and (member (nth 0 link) frontier) (not (member (nth 1 link) seen)))
+              (push (nth 1 link) seen)
+              (push (nth 1 link) next)
+              (when (member (nth 2 link) agent-shell-crew--open-states)
+                (push (cons (nth 1 link) (nth 3 link)) found))))
+          (setq frontier next)))
+      ;; `found' was pushed shallowest first, so it already reads deepest first.
+      found)))
+
 (defun agent-shell-crew-queue-done (root actor id reason &optional canceled status branch)
   "ACTOR closes item ID in ROOT's queue for REASON.
 The item becomes CANCELED when CANCELED is non-nil, DONE otherwise.
-STATUS and BRANCH are as for `agent-shell-crew--put-outcome'."
-  (agent-shell-crew--mutate root id 'done
-    (agent-shell-crew--require-owner actor)
-    (agent-shell-crew--require-state "PENDING" "ACTIVE")
-    (agent-shell-crew--set-state (if canceled "CANCELED" "DONE"))
-    (agent-shell-crew--put-outcome status branch)
-    (agent-shell-crew--log "%s by %s: %s" (if canceled "canceled" "done") actor
-                           (if (agent-shell-crew--blank-p reason) "-"
-                             (agent-shell-crew--clean-line reason)))))
+STATUS and BRANCH are as for `agent-shell-crew--put-outcome'.
 
-(defun agent-shell-crew-queue-handoff (root actor id to summary &optional brief status branch)
+Closing as DONE is the owner's alone.  Cancelling is also allowed to the
+item's creator (its FROM) and the human, so a lead can withdraw work it
+slated, and it reaches a PARKED item too.  A cancel cascades: every open
+item below ID by `:PARENT:' is cancelled first, deepest first, each
+logged.  Returns those as (ID . OWNER), so their owners can be told."
+  (let (cascaded)
+    (agent-shell-crew--mutate root id 'done
+      (if (and canceled
+               (or (equal actor "human") (equal actor (org-entry-get nil "FROM"))))
+          (agent-shell-crew--require-state "PENDING" "ACTIVE" "PARKED")
+        (agent-shell-crew--require-owner actor)
+        (agent-shell-crew--require-state "PENDING" "ACTIVE"))
+      (when canceled
+        (setq cascaded (agent-shell-crew--open-descendants id))
+        (dolist (child cascaded)
+          (agent-shell-crew--goto (car child))
+          (agent-shell-crew--set-state "CANCELED")
+          (agent-shell-crew--log "canceled with parent %s by %s" id actor))
+        (agent-shell-crew--goto id))
+      (agent-shell-crew--set-state (if canceled "CANCELED" "DONE"))
+      (agent-shell-crew--put-outcome status branch)
+      (agent-shell-crew--log "%s by %s: %s" (if canceled "canceled" "done") actor
+                             (if (agent-shell-crew--blank-p reason) "-"
+                               (agent-shell-crew--clean-line reason))))
+    (dolist (child cascaded) (agent-shell-crew--changed root (car child) 'done))
+    cascaded))
+
+(defun agent-shell-crew-queue-handoff (root actor id to summary &optional brief status branch
+                                            request)
   "ACTOR hands item ID in ROOT's queue to TO with SUMMARY and BRIEF.
 Closes ID as HANDED and returns the id of the new item TO owns, which
 inherits the ref, the branch and the status.  STATUS and BRANCH are as
-for `agent-shell-crew--put-outcome'."
+for `agent-shell-crew--put-outcome'.  REQUEST is stored on the new item;
+see `agent-shell-crew-queue-find-request'."
   (when (agent-shell-crew--blank-p to) (agent-shell-crew--fail "A hand-off needs a recipient"))
   (when (equal to actor) (agent-shell-crew--fail "%s cannot hand off to itself" actor))
   (when (agent-shell-crew--blank-p summary) (agent-shell-crew--fail "A hand-off needs a summary"))
@@ -425,6 +505,7 @@ for `agent-shell-crew--put-outcome'."
      :ref (plist-get source :ref)
      :status (plist-get source :status)
      :branch (plist-get source :branch)
+     :request request
      :brief (concat "Handed off by " actor ": " summary
                     (if (agent-shell-crew--blank-p brief) "" (concat "\n\n" brief))))))
 

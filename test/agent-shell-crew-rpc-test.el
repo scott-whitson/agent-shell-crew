@@ -106,5 +106,108 @@
       (should (equal (alist-get 'title (alist-get 'result (crew-rpc-test--call "owner@my-app" root "show" `((id . ,id)))))
                      title)))))
 
+;;; Durable ideas (2026-10-07): request ids, cancel cascade, checkpoints
+
+(defun crew-rpc-test--create (actor root owner &rest more)
+  "Create an item as ACTOR for OWNER in ROOT, with MORE args; return its id."
+  (alist-get 'id (alist-get 'result
+                            (crew-rpc-test--call actor root "create"
+                                                 (append `((title . "T") (brief . "b") (owner . ,owner))
+                                                         more)))))
+
+(ert-deftest crew-rpc-a-repeated-request-id-returns-the-first-item ()
+  (crew-rpc-test--with root
+    (let* ((first (crew-rpc-test--call "owner@my-app" root "create"
+                                       '((title . "T") (brief . "b") (owner . "check@my-app")
+                                         (request_id . "r-1"))))
+           (again (crew-rpc-test--call "owner@my-app" root "create"
+                                       '((title . "T") (brief . "b") (owner . "check@my-app")
+                                         (request_id . "r-1")))))
+      (should (equal (alist-get 'id (alist-get 'result again))
+                     (alist-get 'id (alist-get 'result first))))
+      (should (eq (alist-get 'duplicate (alist-get 'result again)) t))
+      (should (= (length (agent-shell-crew-queue-list root)) 1))
+      (should (= (length crew-rpc-test--notified) 1)))))
+
+(ert-deftest crew-rpc-the-same-request-id-from-another-actor-is-a-new-item ()
+  (crew-rpc-test--with root
+    (crew-rpc-test--create "owner@my-app" root "check@my-app" '(request_id . "r-1"))
+    (crew-rpc-test--create "check@my-app" root "owner@my-app" '(request_id . "r-1"))
+    (should (= (length (agent-shell-crew-queue-list root)) 2))))
+
+(ert-deftest crew-rpc-a-repeated-handoff-is-not-handed-twice ()
+  (crew-rpc-test--with root
+    (let ((id (crew-rpc-test--create "human" root "owner@my-app")))
+      (crew-rpc-test--call "owner@my-app" root "claim" `((id . ,id)))
+      (let* ((args `((id . ,id) (to . "check@my-app") (summary . "s") (request_id . "h-1")))
+             (one (crew-rpc-test--call "owner@my-app" root "handoff" args))
+             (two (crew-rpc-test--call "owner@my-app" root "handoff" args)))
+        (should (eq (alist-get 'ok two) t))
+        (should (equal (alist-get 'id (alist-get 'result two))
+                       (alist-get 'id (alist-get 'result one))))
+        (should (= (length (agent-shell-crew-queue-list root)) 2))))))
+
+(ert-deftest crew-rpc-the-creator-may-cancel-and-the-owner-is-told ()
+  (crew-rpc-test--with root
+    (let ((id (crew-rpc-test--create "owner@my-app" root "check@my-app")))
+      (setq crew-rpc-test--notified nil)
+      (let ((reply (crew-rpc-test--call "owner@my-app" root "done"
+                                        `((id . ,id) (reason . "withdrawn") (canceled . t)))))
+        (should (eq (alist-get 'ok reply) t)))
+      (should (equal (plist-get (agent-shell-crew-queue-get root id) :state) "CANCELED"))
+      (should (equal (car (car crew-rpc-test--notified)) "check@my-app"))
+      (should (string-match-p "canceled by owner@my-app" (nth 2 (car crew-rpc-test--notified)))))))
+
+(ert-deftest crew-rpc-a-stranger-may-not-cancel ()
+  (crew-rpc-test--with root
+    (let ((id (crew-rpc-test--create "owner@my-app" root "owner@my-app")))
+      (let ((reply (crew-rpc-test--call "check@my-app" root "done"
+                                        `((id . ,id) (reason . "x") (canceled . t)))))
+        (should-not (eq (alist-get 'ok reply) t))
+        (should (string-match-p "does not own" (alist-get 'error reply)))))))
+
+(ert-deftest crew-rpc-the-creator-may-not-close-as-done ()
+  (crew-rpc-test--with root
+    (let ((id (crew-rpc-test--create "owner@my-app" root "check@my-app")))
+      (should-not (eq (alist-get 'ok (crew-rpc-test--call "owner@my-app" root "done"
+                                                          `((id . ,id) (reason . "x"))))
+                      t)))))
+
+(ert-deftest crew-rpc-cancel-cascades-to-open-children-deepest-first ()
+  (crew-rpc-test--with root
+    (let* ((top (crew-rpc-test--create "human" root "owner@my-app"))
+           (child (crew-rpc-test--create "owner@my-app" root "check@my-app" `(parent . ,top)))
+           (grandchild (crew-rpc-test--create "check@my-app" root "owner@my-app" `(parent . ,child)))
+           (closed (crew-rpc-test--create "owner@my-app" root "owner@my-app" `(parent . ,top))))
+      (crew-rpc-test--call "owner@my-app" root "done" `((id . ,closed) (reason . "built")))
+      (let* ((reply (crew-rpc-test--call "human" root "done"
+                                         `((id . ,top) (reason . "dropped") (canceled . t))))
+             (children (append (alist-get 'canceled_children (alist-get 'result reply)) nil)))
+        (should (equal children (list grandchild child))))
+      (dolist (id (list top child grandchild))
+        (should (equal (plist-get (agent-shell-crew-queue-get root id) :state) "CANCELED")))
+      (should (equal (plist-get (agent-shell-crew-queue-get root closed) :state) "DONE"))
+      (should (seq-find (lambda (line) (string-match-p (format "canceled with parent %s" top) line))
+                        (plist-get (agent-shell-crew-queue-get root child) :log))))))
+
+(ert-deftest crew-rpc-checkpoint-replaces-and-is-shown ()
+  (crew-rpc-test--with root
+    (let ((id (crew-rpc-test--create "human" root "owner@my-app")))
+      (crew-rpc-test--call "owner@my-app" root "checkpoint" `((id . ,id) (text . "phase 1")))
+      (crew-rpc-test--call "owner@my-app" root "checkpoint" `((id . ,id) (text . "phase 2 next: tests")))
+      (let ((shown (alist-get 'result (crew-rpc-test--call "owner@my-app" root "show" `((id . ,id))))))
+        (should (equal (alist-get 'checkpoint shown) "phase 2 next: tests")))
+      (should-not (eq (alist-get 'ok (crew-rpc-test--call "check@my-app" root "checkpoint"
+                                                          `((id . ,id) (text . "x"))))
+                      t)))))
+
+(ert-deftest crew-rpc-closing-tells-the-session-side ()
+  (crew-rpc-test--with root
+    (let* ((closed nil)
+           (agent-shell-crew-rpc-closed-function (lambda (a r) (push (list a r) closed)))
+           (id (crew-rpc-test--create "human" root "owner@my-app")))
+      (crew-rpc-test--call "owner@my-app" root "done" `((id . ,id) (reason . "built")))
+      (should (equal closed (list (list "owner@my-app" root)))))))
+
 (provide 'agent-shell-crew-rpc-test)
 ;;; agent-shell-crew-rpc-test.el ends here

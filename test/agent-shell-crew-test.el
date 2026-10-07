@@ -529,4 +529,83 @@
 (ert-deftest agent-shell-crew-limit-reset-ignores-ordinary-output ()
   (should-not (agent-shell-crew--limit-reset "All done; the gate passed.\n\nClaude> ")))
 
+;;; A fresh context per item (2026-10-07)
+
+(defmacro crew-fresh-test--with (root &rest body)
+  "A crew at ROOT whose input always reads empty, for BODY."
+  (declare (indent 1))
+  `(crew-main-test--with ,root
+     (cl-letf (((symbol-function 'agent-shell-crew--input-empty-p) (lambda (_b) t)))
+       ,@body)))
+
+(defun crew-fresh-test--starts ()
+  "How many sessions the stub has started."
+  (length (seq-filter (lambda (c) (eq (car c) 'start)) agent-shell-test--calls)))
+
+(ert-deftest crew-fresh-member-gets-a-new-session-after-closing-an-item ()
+  (crew-fresh-test--with root
+    (let ((old (agent-shell-crew--start-member root "owner" :socket "/s" :fresh t)))
+      (with-current-buffer old (setq agent-shell-crew--pending '("held nudge")))
+      (agent-shell-crew--fresh-due "owner@my-app" root)
+      (let ((new (agent-shell-crew--maybe-refresh old)))
+        (should-not (buffer-live-p old))
+        (should (buffer-live-p new))
+        (should (eq new (agent-shell-crew--member-buffer "owner@my-app" root)))
+        (should (= (crew-fresh-test--starts) 2))
+        ;; Still fresh, not due, and the held nudge moved across.
+        (should (plist-get (buffer-local-value 'agent-shell-crew--spec new) :fresh))
+        (should-not (buffer-local-value 'agent-shell-crew--refresh new))
+        (should (equal (buffer-local-value 'agent-shell-crew--pending new) '("held nudge")))))))
+
+(ert-deftest crew-fresh-waits-while-busy-and-stays-due ()
+  (crew-fresh-test--with root
+    (let ((old (agent-shell-crew--start-member root "owner" :socket "/s" :fresh t)))
+      (agent-shell-crew--fresh-due "owner@my-app" root)
+      (let ((agent-shell-test--busy t))
+        (should-not (agent-shell-crew--maybe-refresh old)))
+      (should (buffer-live-p old))
+      (should (buffer-local-value 'agent-shell-crew--refresh old))
+      (should (agent-shell-crew--maybe-refresh old)))))
+
+(ert-deftest crew-fresh-never-at-a-permission-prompt-or-with-a-draft ()
+  (crew-main-test--with root
+    (let ((old (agent-shell-crew--start-member root "owner" :socket "/s" :fresh t)))
+      (agent-shell-crew--fresh-due "owner@my-app" root)
+      ;; The stub buffer has no process, so its input never reads empty: a draft.
+      (should (equal (agent-shell-crew--refresh-blocker old) "a draft in its input"))
+      (cl-letf (((symbol-function 'agent-shell-crew--input-empty-p) (lambda (_b) t)))
+        (with-current-buffer old (setq agent-shell-test--status 'blocked))
+        (should (equal (agent-shell-crew--refresh-blocker old) "at a permission prompt"))
+        (should-not (agent-shell-crew--maybe-refresh old))
+        (should (buffer-live-p old))))))
+
+(ert-deftest crew-a-member-without-fresh-is-never-restarted ()
+  (crew-fresh-test--with root
+    (let ((old (agent-shell-crew--start-member root "owner" :socket "/s")))
+      (agent-shell-crew--fresh-due "owner@my-app" root)
+      (should-not (buffer-local-value 'agent-shell-crew--refresh old))
+      (should-not (agent-shell-crew--maybe-refresh old))
+      (should (= (crew-fresh-test--starts) 1)))))
+
+(ert-deftest crew-intro-carries-each-items-checkpoint ()
+  (crew-main-test--with root
+    (let ((id (agent-shell-crew-queue-create root "human" :title "T" :owner "owner@my-app")))
+      (agent-shell-crew-queue-checkpoint root "owner@my-app" id "phase 2 | next: tests")
+      (should (string-match-p (regexp-quote (format "%s (checkpoint: phase 2 | next: tests)" id))
+                              (agent-shell-crew--intro "owner" "owner@my-app" root))))))
+
+(ert-deftest crew-profile-fresh-per-item-member-overrides-profile ()
+  (crew-fresh-test--with root
+    (let ((agent-shell-crew-profiles
+           `(("app" :root ,root :fresh-per-item t
+              :members ((:role "owner" :name "owner-1")
+                        (:role "check" :name "check-1" :fresh-per-item nil))))))
+      (agent-shell-crew-start-profile "app")
+      (should (plist-get (buffer-local-value
+                          'agent-shell-crew--spec (agent-shell-crew--member-buffer "owner-1@my-app" root))
+                         :fresh))
+      (should-not (plist-get (buffer-local-value
+                              'agent-shell-crew--spec (agent-shell-crew--member-buffer "check-1@my-app" root))
+                             :fresh)))))
+
 ;;; agent-shell-crew-test.el ends here

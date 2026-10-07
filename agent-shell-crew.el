@@ -77,7 +77,9 @@ Each element is (NAME . PLIST).  PLIST has :root, the crew's project
 root (it names the queue and the @PROJECT of every member), and
 :members, a list of member plists: :role, and optionally :name
 \(default: the role), :directory (default: the root) and :brief (a file
-name or the brief text, overriding the role's)."
+name or the brief text, overriding the role's).  :fresh-per-item t, on
+the profile or a member (the member's wins), gives that member a new
+session after each item it closes; see `agent-shell-crew--maybe-refresh'."
   :type '(alist :key-type string :value-type plist)
   :group 'agent-shell-crew)
 
@@ -110,6 +112,16 @@ name or the brief text, overriding the role's)."
 Nudges wait until it is ready, so none is lost and none arrives before
 the member's brief.")
 (put 'agent-shell-crew--ready 'permanent-local t)
+
+(defvar-local agent-shell-crew--spec nil
+  "How this member was started, so it can be started again the same way.
+A plist of :role, :name, :directory, :brief, :socket and :fresh.  Nil
+for a session crew did not start.")
+(put 'agent-shell-crew--spec 'permanent-local t)
+
+(defvar-local agent-shell-crew--refresh nil
+  "Non-nil once this member has closed an item and is due a fresh context.")
+(put 'agent-shell-crew--refresh 'permanent-local t)
 
 (defvar agent-shell-crew-session-changed-hook nil
   "Hook run when a crew session's status may have changed.
@@ -199,7 +211,11 @@ BRIEF overrides ROLE's brief."
             (agent-shell-crew--brief role brief)
             (if owned
                 (format "\n\nYou already own: %s.  Start with crew_mine."
-                        (mapconcat (lambda (item) (plist-get item :id)) owned ", "))
+                        (mapconcat (lambda (item)
+                                     (let ((cp (plist-get item :checkpoint)))
+                                       (if cp (format "%s (checkpoint: %s)" (plist-get item :id) cp)
+                                         (plist-get item :id))))
+                                   owned "; "))
               ""))))
 
 (defun agent-shell-crew--member-buffer (member &optional root)
@@ -445,6 +461,10 @@ nudges that arrived meanwhile.  BRIEF overrides ROLE's brief."
       (agent-shell-subscribe-to
        :shell-buffer buffer :event event
        :on-event (lambda (_event) (agent-shell-crew--flush buffer))))
+    (agent-shell-subscribe-to
+     :shell-buffer buffer :event 'turn-complete
+     ;; Not inside the event: the refresh kills this buffer.
+     :on-event (lambda (_event) (run-at-time 0 nil #'agent-shell-crew--maybe-refresh buffer)))
     (dolist (event '(input-submitted turn-complete permission-request permission-response))
       (agent-shell-subscribe-to
        :shell-buffer buffer :event event
@@ -474,11 +494,13 @@ with several, a choice among them; with none, a directory."
   "Return the current project root, or `default-directory'."
   (if-let* ((project (project-current))) (project-root project) default-directory))
 
-(cl-defun agent-shell-crew--start-member (root role &key name directory brief socket)
+(cl-defun agent-shell-crew--start-member (root role &key name directory brief socket fresh)
   "Start crew member NAME (default ROLE) of ROOT's crew and return its buffer.
 The session runs in DIRECTORY (default ROOT) but acts on ROOT's queue.
 BRIEF overrides ROLE's brief.  SOCKET is the Emacs server to reach.
-Returns nil when the member is already running."
+FRESH non-nil gives the member a new session after each item it closes;
+see `agent-shell-crew--maybe-refresh'.  Returns nil when the member is
+already running."
   (let ((member (agent-shell-crew-member-name (or name role) root)))
     (if (agent-shell-crew--member-buffer member root)
         (progn (message "%s is already running" member) nil)
@@ -486,7 +508,56 @@ Returns nil when the member is already running."
                      (agent-shell-crew--normal-root (or directory root))
                      (agent-shell-crew--session-config role root socket name))))
         (agent-shell-crew--adopt buffer member role root brief)
+        (with-current-buffer buffer
+          (setq agent-shell-crew--spec (list :role role :name name :directory directory
+                                             :brief brief :socket socket :fresh fresh)))
         buffer))))
+
+;;; A fresh context per item
+
+(defun agent-shell-crew--fresh-due (member root)
+  "Note that MEMBER of ROOT's crew closed an item.
+A member started with :fresh-per-item gets a new session once its turn
+ends.  Every call re-reads the whole session, so a member that has done
+twenty items carries all twenty into the twenty-first: on 2026-10-07 the
+pearl crew re-read 1.47 billion tokens, at 258k to 814k per call."
+  (when-let* ((buffer (agent-shell-crew--member-buffer member root))
+              ((plist-get (buffer-local-value 'agent-shell-crew--spec buffer) :fresh)))
+    (with-current-buffer buffer (setq agent-shell-crew--refresh t))))
+
+(defun agent-shell-crew--refresh-blocker (buffer)
+  "Why BUFFER cannot be given a fresh session now, or nil when it can.
+Never while it works, waits at a permission prompt, holds a human's draft
+or has messages queued in agent-shell, which a new session would lose."
+  (with-current-buffer buffer
+    (cond ((shell-maker-busy) "busy")
+          ((eq (condition-case nil (agent-shell-status :shell-buffer buffer) (error nil)) 'blocked)
+           "at a permission prompt")
+          ((not (agent-shell-crew--input-empty-p buffer)) "a draft in its input")
+          ((> (length (map-elt agent-shell--state :pending-prompts)) 0) "queued messages"))))
+
+(defun agent-shell-crew--maybe-refresh (buffer)
+  "Give BUFFER's member a new session if it is due one and nothing blocks it.
+The new session gets the brief and, through `agent-shell-crew--intro', the
+items the member still owns with their checkpoints: Pi's reset to a
+handoff note.  Nudges BUFFER was holding move to the new session.  When
+something blocks it, it stays due and the next turn end tries again."
+  (when (and (buffer-live-p buffer)
+             (buffer-local-value 'agent-shell-crew--refresh buffer)
+             (not (agent-shell-crew--refresh-blocker buffer)))
+    (let ((spec (buffer-local-value 'agent-shell-crew--spec buffer))
+          (root (buffer-local-value 'agent-shell-crew--root buffer))
+          (held (buffer-local-value 'agent-shell-crew--pending buffer))
+          (kill-buffer-query-functions nil))
+      (with-current-buffer buffer (set-buffer-modified-p nil))
+      (kill-buffer buffer)
+      (when-let* ((new (agent-shell-crew--start-member
+                        root (plist-get spec :role)
+                        :name (plist-get spec :name) :directory (plist-get spec :directory)
+                        :brief (plist-get spec :brief) :socket (plist-get spec :socket)
+                        :fresh t)))
+        (with-current-buffer new (setq agent-shell-crew--pending held))
+        new))))
 
 ;;;###autoload
 (defun agent-shell-crew-start (root roles)
@@ -631,7 +702,10 @@ used twice starts nothing."
                            :name (plist-get spec :name)
                            :directory (plist-get spec :directory)
                            :brief (plist-get spec :brief)
-                           :socket socket))
+                           :socket socket
+                           :fresh (if (plist-member spec :fresh-per-item)
+                                      (plist-get spec :fresh-per-item)
+                                    (plist-get (cdr profile) :fresh-per-item))))
                         specs)))))
 
 (defun agent-shell-crew--start-new-session (directory config)
@@ -826,7 +900,8 @@ The dot needs `agent-shell-crew-list' loaded; see `agent-shell-crew-health'."
     (remove-hook 'agent-shell-crew-changed-hook #'agent-shell-crew--refresh-count)))
 
 (setq agent-shell-crew-rpc-members-function #'agent-shell-crew-members
-      agent-shell-crew-rpc-notify-function #'agent-shell-crew--notify)
+      agent-shell-crew-rpc-notify-function #'agent-shell-crew--notify
+      agent-shell-crew-rpc-closed-function #'agent-shell-crew--fresh-due)
 
 (provide 'agent-shell-crew)
 ;;; agent-shell-crew.el ends here

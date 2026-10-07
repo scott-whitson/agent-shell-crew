@@ -1,6 +1,6 @@
 # Durable ideas: fresh context per item, idempotent calls, cancel cascade
 
-**Status: spec, approved in principle by Scott 2026-10-07. Nothing is built.**
+**Status: built 2026-10-07 (§1-§4); §5 is in the briefs. The live trial is open.**
 Source: a review of `@earendil-works/pi-durable` (README, 2026-10-07) against
 this package. Pi's harness commits every step before showing it, resets a
 conversation to a handoff note, de-duplicates retried submissions by
@@ -120,15 +120,15 @@ sentence) stays plain prose. The package documents the format in
 
 ## Tasks
 
-- [ ] §3 request ids: queue `:REQUEST:` lookup; RPC create/handoff; MCP UUID
+- [x] §3 request ids: queue `:REQUEST:` lookup; RPC create/handoff; MCP UUID
       and one same-id retry on timeout. Tests: duplicate returns the same id,
       no second nudge; timeout-then-retry creates one item.
-- [ ] §4 creator and human may cancel; cascade over `:PARENT:`; `parent` on
+- [x] §4 creator and human may cancel; cascade over `:PARENT:`; `parent` on
       create. Tests: lead cancels a lane item; cascade order; closed items untouched.
-- [ ] §2 `crew_checkpoint` and `:CHECKPOINT:`; included in resume text.
-- [ ] §1 `:fresh-per-item`: restart-new after close/handoff at turn end, with
+- [x] §2 `crew_checkpoint` and `:CHECKPOINT:`; included in resume text.
+- [x] §1 `:fresh-per-item`: restart-new after close/handoff at turn end, with
       the handoff note; skip busy, prompt and draft. Tests for each.
-- [ ] §5 the format, in `briefs/owner.md`, `check.md`, `lead.md`.
-- [ ] design.md: sections for each, and "Alternatives considered" gains pi-durable.
+- [x] §5 the format, in `briefs/owner.md`, `check.md`, `lead.md`.
+- [x] design.md: sections for each, and "Alternatives considered" gains pi-durable.
 - [ ] Live: one pearl lane with `:fresh-per-item t` for a day; compare its
       average context per call with today's 258k to 814k.

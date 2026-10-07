@@ -14,6 +14,7 @@ import json
 import os
 import subprocess
 import sys
+import uuid
 
 VERSION = "0.1.0"
 DEFAULT_PROTOCOL = "2025-06-18"
@@ -29,18 +30,28 @@ S = {"type": "string"}
 STATUS = {"type": "string", "description": "One sentence: what state the work is in and "
           "whether it succeeded, e.g. 'Built and gated, merged to main; live check not reached.'"}
 BRANCH = {"type": "string", "description": "The git branch this work is on, if any."}
+# Optional. The same request_id twice returns the first call's item instead of
+# making a second one. Left out, this program supplies one per call.
+REQUEST = {"type": "string", "description": "Optional id for this call; repeating it "
+           "returns the existing item instead of creating another."}
 TOOLS = [
     _tool("crew_mine", "List the crew items you own."),
     _tool("crew_list", "List every crew item in this project."),
     _tool("crew_show", "Show one crew item: brief, properties and log.", {"id": S}, ["id"]),
     _tool("crew_create", "Create a crew item for a crew member, or for `human`.",
           {"title": S, "brief": S, "owner": S, "evidence": S, "ref": S, "status": STATUS,
-           "branch": BRANCH}, ["title", "brief", "owner"]),
+           "branch": BRANCH, "parent": {"type": "string", "description": "Optional id of the "
+           "item this work belongs to; cancelling that item cancels this one too."},
+           "request_id": REQUEST}, ["title", "brief", "owner"]),
     _tool("crew_claim", "Claim an item you own: PENDING to ACTIVE.", {"id": S}, ["id"]),
     _tool("crew_note", "Append a line to an item's log.", {"id": S, "text": S}, ["id", "text"]),
     _tool("crew_handoff", "Close your item as HANDED and open a new item for `to`.",
-          {"id": S, "to": S, "summary": S, "brief": S, "status": STATUS, "branch": BRANCH},
-          ["id", "to", "summary"]),
+          {"id": S, "to": S, "summary": S, "brief": S, "status": STATUS, "branch": BRANCH,
+           "request_id": REQUEST}, ["id", "to", "summary"]),
+    _tool("crew_checkpoint", "Record where your item stands, as one line: the phase reached "
+          "and what is next. Replaces the last checkpoint. If your session restarts, you "
+          "resume from it, so set one at each task boundary.", {"id": S, "text": S},
+          ["id", "text"]),
     _tool("crew_stage", "Record that your item's work has reached a stage the crew tracks after "
           "it closes, such as `deployed` or `live-checked`, with the evidence. Works on a "
           "closed item.", {"id": S, "stage": S, "evidence": S, "status": STATUS},
@@ -50,14 +61,23 @@ TOOLS = [
           "it. Point `evidence` at a file the human should read. Call it again on an item "
           "that is already parked to REPLACE a question the situation has made stale.",
           {"id": S, "question": S, "evidence": S, "status": STATUS}, ["id", "question"]),
-    _tool("crew_done", "Close your item as DONE, or CANCELED when `canceled` is true.",
+    _tool("crew_done", "Close your item as DONE, or CANCELED when `canceled` is true. The "
+          "item's creator and the human may also cancel it. Cancelling also cancels every "
+          "open item below it (by parent), and their owners are told.",
           {"id": S, "reason": S, "canceled": {"type": "boolean"}, "status": STATUS,
            "branch": BRANCH}, ["id", "reason"]),
 ]
 ALLOWED = {t["name"]: set(t["inputSchema"]["properties"]) for t in TOOLS}
 
-def call_emacs(verb, args):
-    """Send one request to Emacs; return (result, error)."""
+# Verbs safe to send twice: reads, and the two creating verbs, which carry a
+# request_id so a second send finds the first one's item.
+RETRY_ON_TIMEOUT = {"mine", "list", "show", "create", "handoff"}
+TIMEOUT = float(os.environ.get("CREW_RPC_TIMEOUT", "30"))
+
+def call_emacs(verb, args, retried=False):
+    """Send one request to Emacs; return (result, error).
+    A timeout is retried once for RETRY_ON_TIMEOUT verbs: Emacs may have done
+    the work and only the answer was late, as on 2026-10-07."""
     request = {"actor": os.environ.get("CREW_AGENT", ""),
                "project": os.environ.get("CREW_PROJECT", ""),
                "verb": verb, "args": args}
@@ -67,11 +87,13 @@ def call_emacs(verb, args):
         cmd += ["-s", os.environ["CREW_EMACS_SOCKET"]]
     cmd += ["--eval", '(agent-shell-crew-rpc "%s")' % payload]
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=TIMEOUT)
     except FileNotFoundError:
         return None, "Could not reach Emacs: emacsclient not found"
     except subprocess.TimeoutExpired:
-        return None, "Could not reach Emacs: no answer within 30 seconds"
+        if verb in RETRY_ON_TIMEOUT and not retried:
+            return call_emacs(verb, args, retried=True)
+        return None, "Could not reach Emacs: no answer within %g seconds" % TIMEOUT
     if out.returncode != 0:
         return None, "Could not reach Emacs: %s" % ((out.stderr or out.stdout).strip() or "exit %d" % out.returncode)
     text = out.stdout.strip()
@@ -110,6 +132,8 @@ def handle(message):
             return {"jsonrpc": "2.0", "id": mid, "result": tool_result("Unknown tool: %s" % name, True)}
         arguments = params.get("arguments") or {}
         args = {k: v for k, v in arguments.items() if k in ALLOWED[name]}
+        if "request_id" in ALLOWED[name] and not args.get("request_id"):
+            args["request_id"] = str(uuid.uuid4())
         result, error = call_emacs(name[len("crew_"):], args)
         if error:
             return {"jsonrpc": "2.0", "id": mid, "result": tool_result(error, True)}

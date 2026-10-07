@@ -40,6 +40,16 @@ Nil means nobody is told; items still wait in the queue.")
   "Function called with ROOT that returns the names allowed as owners.
 Nil accepts any name.")
 
+(defvar agent-shell-crew-rpc-closed-function nil
+  "Function called with ACTOR and ROOT after ACTOR closes or hands off an item.
+Nil does nothing.  The session side uses it to give a member a fresh
+context once its turn ends; see `agent-shell-crew--fresh-due'.")
+
+(defun agent-shell-crew--rpc-closed (actor root)
+  "Run `agent-shell-crew-rpc-closed-function' for ACTOR and ROOT.  Never signals."
+  (when agent-shell-crew-rpc-closed-function
+    (condition-case nil (funcall agent-shell-crew-rpc-closed-function actor root) (error nil))))
+
 (defun agent-shell-crew--rpc-encode (object)
   "Return OBJECT as base64-encoded JSON."
   (base64-encode-string (encode-coding-string (json-encode object) 'utf-8) t))
@@ -60,6 +70,7 @@ Nil accepts any name.")
     (ref . ,(plist-get item :ref))
     (status . ,(plist-get item :status))
     (branch . ,(plist-get item :branch))
+    (checkpoint . ,(plist-get item :checkpoint))
     (question . ,(plist-get item :question))
     (decision . ,(plist-get item :decision))
     (brief . ,(plist-get item :brief))
@@ -95,38 +106,60 @@ Nil accepts any name.")
       ("list" (vconcat (mapcar #'agent-shell-crew--item-json (agent-shell-crew-queue-list root))))
       ("show" (agent-shell-crew--item-json (agent-shell-crew-queue-get root (funcall arg 'id t))))
       ("create"
-       (let ((owner (funcall arg 'owner t)) (title (funcall arg 'title t)))
-         (agent-shell-crew--rpc-check-member root owner)
-         (let ((id (agent-shell-crew-queue-create root actor :title title :owner owner
-                                                  :brief (funcall arg 'brief)
-                                                  :evidence (funcall arg 'evidence)
-                                                  :ref (funcall arg 'ref)
-                                                  :status (funcall arg 'status)
-                                                  :branch (funcall arg 'branch))))
-           (agent-shell-crew--rpc-notify owner root (agent-shell-crew--nudge-text id title))
-           `((id . ,id)))))
+       (let ((owner (funcall arg 'owner t)) (title (funcall arg 'title t))
+             (request (funcall arg 'request_id)))
+         (if-let* ((old (agent-shell-crew-queue-find-request root actor request)))
+             `((id . ,old) (duplicate . t))
+           (agent-shell-crew--rpc-check-member root owner)
+           (let ((id (agent-shell-crew-queue-create root actor :title title :owner owner
+                                                    :brief (funcall arg 'brief)
+                                                    :evidence (funcall arg 'evidence)
+                                                    :ref (funcall arg 'ref)
+                                                    :parent (funcall arg 'parent)
+                                                    :status (funcall arg 'status)
+                                                    :branch (funcall arg 'branch)
+                                                    :request request)))
+             (agent-shell-crew--rpc-notify owner root (agent-shell-crew--nudge-text id title))
+             `((id . ,id))))))
       ("claim" (agent-shell-crew-queue-claim root actor (funcall arg 'id t)) '((done . t)))
       ("note" (agent-shell-crew-queue-note root actor (funcall arg 'id t) (funcall arg 'text t))
               '((done . t)))
       ("handoff"
-       (let ((to (funcall arg 'to t)))
-         (agent-shell-crew--rpc-check-member root to)
-         (let* ((new (agent-shell-crew-queue-handoff root actor (funcall arg 'id t) to
-                                                     (funcall arg 'summary t) (funcall arg 'brief)
-                                                     (funcall arg 'status) (funcall arg 'branch)))
-                (title (plist-get (agent-shell-crew-queue-get root new) :title)))
-           (agent-shell-crew--rpc-notify to root (agent-shell-crew--nudge-text new title))
-           `((id . ,new)))))
+       (let ((to (funcall arg 'to t)) (request (funcall arg 'request_id)))
+         (if-let* ((old (agent-shell-crew-queue-find-request root actor request)))
+             `((id . ,old) (duplicate . t))
+           (agent-shell-crew--rpc-check-member root to)
+           (let* ((new (agent-shell-crew-queue-handoff root actor (funcall arg 'id t) to
+                                                       (funcall arg 'summary t) (funcall arg 'brief)
+                                                       (funcall arg 'status) (funcall arg 'branch)
+                                                       request))
+                  (title (plist-get (agent-shell-crew-queue-get root new) :title)))
+             (agent-shell-crew--rpc-notify to root (agent-shell-crew--nudge-text new title))
+             (agent-shell-crew--rpc-closed actor root)
+             `((id . ,new))))))
+      ("checkpoint" (agent-shell-crew-queue-checkpoint root actor (funcall arg 'id t)
+                                                       (funcall arg 'text t))
+                    '((done . t)))
       ("stage" (agent-shell-crew-queue-stage root actor (funcall arg 'id t) (funcall arg 'stage t)
                                              (funcall arg 'evidence t) (funcall arg 'status))
                '((done . t)))
       ("park" (agent-shell-crew-queue-park root actor (funcall arg 'id t) (funcall arg 'question t)
                                            (funcall arg 'evidence) (funcall arg 'status))
               '((done . t)))
-      ("done" (agent-shell-crew-queue-done root actor (funcall arg 'id t) (funcall arg 'reason)
-                                           (eq (funcall arg 'canceled) t)
-                                           (funcall arg 'status) (funcall arg 'branch))
-              '((done . t)))
+      ("done"
+       (let* ((id (funcall arg 'id t))
+              (owner (plist-get (agent-shell-crew-queue-get root id) :owner))
+              (cascaded (agent-shell-crew-queue-done root actor id (funcall arg 'reason)
+                                                     (eq (funcall arg 'canceled) t)
+                                                     (funcall arg 'status) (funcall arg 'branch))))
+         ;; Whoever loses work they own is told: the owner, when someone else
+         ;; cancelled it, and every owner of an item the cancel cascaded to.
+         (dolist (lost (cons (cons id owner) cascaded))
+           (unless (equal (cdr lost) actor)
+             (agent-shell-crew--rpc-notify
+              (cdr lost) root (format "Crew item %s was canceled by %s. Stop work on it." (car lost) actor))))
+         (when (equal owner actor) (agent-shell-crew--rpc-closed actor root))
+         `((done . t) (canceled_children . ,(vconcat (mapcar #'car cascaded))))))
       (_ (agent-shell-crew--fail "Unknown verb: %s" verb)))))
 
 ;;;###autoload

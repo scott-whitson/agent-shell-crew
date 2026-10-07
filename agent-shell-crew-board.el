@@ -371,9 +371,10 @@ answer is older than `agent-shell-crew-check-minutes'."
 (defun agent-shell-crew-board--format (stages &optional rows width)
   "The `tabulated-list-format' for a board with STAGES, ROWS and WIDTH.
 Columns fit what they hold, so the title and status start as far left as
-they can: Ref is as wide as the longest ref (at most 8, so a long one is cut), and Title as the
-longest title, but never more than 45% of what the window has left, so the
-status keeps room for its sentence.  WIDTH defaults to 100."
+they can: Ref is as wide as the longest ref (at most 8, so a long one
+is cut), and Title as the longest title, but never more than 45% of
+what the window has left, so the status keeps room for its sentence.
+WIDTH defaults to 100."
   (let* ((width (or width 100))
          (longest (lambda (key floor cap)
                     (min cap (max floor (apply #'max 0 (mapcar (lambda (r) (length (or (plist-get r key) "")))

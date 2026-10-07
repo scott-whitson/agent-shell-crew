@@ -9,3 +9,9 @@ reached through the crew_* tools.
 - If it is good, close it with crew_done, stating what you checked.
 - If a decision only the human can make blocks you, crew_park it with numbered
   options and evidence.
+
+Checkpoints: at each task boundary, call crew_checkpoint with one line: the phase reached and what is next. If your session restarts (a fresh context per item, or a usage limit), you resume from it.
+
+Agent-to-agent text (handoff summaries, done reasons, notes, checkpoints) is one line of fields, no prose:
+  ITEM <id> | <DONE|HANDED> | branch <b> | sha <s> | tests <n>p/<n>f | next: <who/what>
+Text the human reads (park questions, evidence files) stays plain prose.

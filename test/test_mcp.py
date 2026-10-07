@@ -8,6 +8,11 @@ FAKE = r"""#!/usr/bin/env python3
 import json, os, sys
 with open(os.environ["FAKE_LOG"], "a") as f:
     f.write(json.dumps(sys.argv[1:]) + "\n")
+# FAKE_SLEEP_ONCE: the first call hangs past the timeout, as a slow Emacs did.
+marker = os.environ["FAKE_LOG"] + ".slept"
+if os.environ.get("FAKE_SLEEP_ONCE") and not os.path.exists(marker):
+    open(marker, "w").close()
+    import time; time.sleep(float(os.environ["FAKE_SLEEP_ONCE"]))
 sys.stdout.write(os.environ.get("FAKE_REPLY", ""))
 sys.exit(int(os.environ.get("FAKE_RC", "0")))
 """
@@ -57,7 +62,8 @@ class McpTest(unittest.TestCase):
         self.assertEqual(out[0]["result"]["protocolVersion"], "2025-06-18")
         names = {t["name"] for t in out[1]["result"]["tools"]}
         self.assertEqual(names, {"crew_mine", "crew_list", "crew_show", "crew_create", "crew_claim",
-                                 "crew_note", "crew_handoff", "crew_stage", "crew_park", "crew_done"})
+                                 "crew_note", "crew_handoff", "crew_stage", "crew_park", "crew_done",
+                                 "crew_checkpoint"})
 
     def test_call_forwards_with_identity_from_environment(self):
         out = self.run_session([{"jsonrpc": "2.0", "id": 3, "method": "tools/call",
@@ -100,6 +106,35 @@ class McpTest(unittest.TestCase):
                            "params": {"name": "crew_create",
                                       "arguments": {"title": title, "owner": "check@my-app", "brief": "b"}}}])
         self.assertEqual(self.request(self.calls()[0])["args"]["title"], title)
+
+    def create(self, arguments, **env):
+        return self.run_session([{"jsonrpc": "2.0", "id": 9, "method": "tools/call",
+                                  "params": {"name": "crew_create", "arguments": arguments}}], **env)
+
+    def test_create_gets_a_request_id_when_the_agent_gives_none(self):
+        self.create({"title": "t", "owner": "check@my-app", "brief": "b"})
+        rid = self.request(self.calls()[0])["args"]["request_id"]
+        self.assertEqual(len(rid), 36)
+
+    def test_an_agents_own_request_id_is_kept(self):
+        self.create({"title": "t", "owner": "check@my-app", "brief": "b", "request_id": "r-1"})
+        self.assertEqual(self.request(self.calls()[0])["args"]["request_id"], "r-1")
+
+    def test_a_timed_out_create_is_retried_once_with_the_same_request_id(self):
+        """2026-10-07: crew_create timed out but Emacs had made the item."""
+        out = self.create({"title": "t", "owner": "check@my-app", "brief": "b"},
+                          FAKE_SLEEP_ONCE="3", CREW_RPC_TIMEOUT="1")
+        self.assertFalse(out[0]["result"]["isError"])
+        ids = [self.request(c)["args"]["request_id"] for c in self.calls()]
+        self.assertEqual(len(ids), 2)
+        self.assertEqual(ids[0], ids[1])
+
+    def test_a_timed_out_claim_is_not_retried(self):
+        out = self.run_session([{"jsonrpc": "2.0", "id": 10, "method": "tools/call",
+                                 "params": {"name": "crew_claim", "arguments": {"id": "c-1"}}}],
+                               FAKE_SLEEP_ONCE="3", CREW_RPC_TIMEOUT="1")
+        self.assertTrue(out[0]["result"]["isError"])
+        self.assertEqual(len(self.calls()), 1)
 
 if __name__ == "__main__":
     unittest.main()

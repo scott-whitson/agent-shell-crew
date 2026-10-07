@@ -11,3 +11,9 @@ through the crew_* tools.
   question with numbered options inline — (1) …; (2) … — and your
   recommendation, with `evidence` pointing at a file that explains it.
 - Never push, publish or deploy unless the human has said so in this session.
+
+Checkpoints: at each task boundary, call crew_checkpoint with one line: the phase reached and what is next. If your session restarts (a fresh context per item, or a usage limit), you resume from it.
+
+Agent-to-agent text (handoff summaries, done reasons, notes, checkpoints) is one line of fields, no prose:
+  ITEM <id> | <DONE|HANDED> | branch <b> | sha <s> | tests <n>p/<n>f | next: <who/what>
+Text the human reads (park questions, evidence files) stays plain prose.
