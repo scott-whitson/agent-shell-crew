@@ -164,6 +164,26 @@ One crew, one queue, members in several worktrees — for parallel lanes:
 `M-x agent-shell-crew-start-profile` starts every member not already running.
 The package does not create worktrees; that is your setup.
 
+### Keeping cost down
+
+Two settings carry most of the saving:
+
+- `:fresh-per-item t` on a member (or on the whole profile) gives it a new
+  session once its item closes, so each item starts small instead of
+  re-reading days of history. Leave it off for a lead that must remember
+  the conversation with you.
+- A cheaper model for roles that read more than they write: give a role a
+  `:config-maker` that returns a Claude Code config on Sonnet, and point
+  lead, gate and check members at it. Keep owners on the strongest model.
+
+Measured on one crew, a full day before and after: average context per
+call fell from 476k to 75k tokens, and cache reads per closed item from
+11.2M to 2.9M. No session hit its usage limit.
+
+Session names change on every fresh start. Address members through crew
+items (`crew_create`, `crew_handoff` to `role@project`), never by session
+name: a message to an old session name goes nowhere.
+
 ## Development
 
 `make check` byte-compiles, runs checkdoc and all tests against stub
