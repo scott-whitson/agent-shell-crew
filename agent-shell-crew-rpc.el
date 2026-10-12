@@ -30,6 +30,7 @@
 ;;; Code:
 
 (require 'json)
+(require 'seq)
 (require 'agent-shell-crew-queue)
 
 (defvar agent-shell-crew-rpc-notify-function nil
@@ -78,6 +79,18 @@ Never signals."
     (brief . ,(plist-get item :brief))
     (log . ,(vconcat (plist-get item :log)))))
 
+(defun agent-shell-crew--open-summaries (items)
+  "Return the open ITEMS as a vector of summaries, without brief or log.
+Every item ever, with its log, ran to megabytes and broke the reply
+\(2026-10-12); `show' still returns the whole item."
+  (vconcat
+   (mapcar (lambda (item)
+             (seq-remove (lambda (pair) (memq (car pair) '(brief log evidence)))
+                         (agent-shell-crew--item-json item)))
+           (seq-filter (lambda (item)
+                         (member (plist-get item :state) agent-shell-crew--open-states))
+                       items))))
+
 (defun agent-shell-crew--rpc-arg (args key &optional required)
   "Return KEY from ARGS, failing when REQUIRED and blank."
   (let ((value (alist-get key args)))
@@ -107,8 +120,8 @@ URGENT non-nil asks for the text to be steered into a running turn."
   "Run VERB with ARGS in ROOT's queue on behalf of ACTOR."
   (let ((arg (lambda (key &optional required) (agent-shell-crew--rpc-arg args key required))))
     (pcase verb
-      ("mine" (vconcat (mapcar #'agent-shell-crew--item-json (agent-shell-crew-queue-list root actor))))
-      ("list" (vconcat (mapcar #'agent-shell-crew--item-json (agent-shell-crew-queue-list root))))
+      ("mine" (agent-shell-crew--open-summaries (agent-shell-crew-queue-list root actor)))
+      ("list" (agent-shell-crew--open-summaries (agent-shell-crew-queue-list root)))
       ("show" (agent-shell-crew--item-json (agent-shell-crew-queue-get root (funcall arg 'id t))))
       ("create"
        (let ((owner (funcall arg 'owner t)) (title (funcall arg 'title t))

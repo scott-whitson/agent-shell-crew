@@ -10,6 +10,7 @@
 # process's environment -- never a tool argument.
 """agent-shell-crew MCP server."""
 import base64
+import re
 import json
 import os
 import subprocess
@@ -35,8 +36,8 @@ BRANCH = {"type": "string", "description": "The git branch this work is on, if a
 REQUEST = {"type": "string", "description": "Optional id for this call; repeating it "
            "returns the existing item instead of creating another."}
 TOOLS = [
-    _tool("crew_mine", "List the crew items you own."),
-    _tool("crew_list", "List every crew item in this project."),
+    _tool("crew_mine", "List your OPEN crew items (pending, active, parked), without brief or log; crew_show gives the whole item."),
+    _tool("crew_list", "List every OPEN crew item in this project, without brief or log; crew_show gives the whole item."),
     _tool("crew_show", "Show one crew item: brief, properties and log.", {"id": S}, ["id"]),
     _tool("crew_create", "Create a crew item for a crew member, or for `human`.",
           {"title": S, "brief": S, "owner": S, "evidence": S, "ref": S, "status": STATUS,
@@ -99,11 +100,14 @@ def call_emacs(verb, args, retried=False):
         return None, "Could not reach Emacs: no answer within %g seconds" % TIMEOUT
     if out.returncode != 0:
         return None, "Could not reach Emacs: %s" % ((out.stderr or out.stdout).strip() or "exit %d" % out.returncode)
-    text = out.stdout.strip()
-    if len(text) >= 2 and text[0] == text[-1] == '"':
-        text = text[1:-1]
+    # The reply is one base64 run inside emacsclient's quoting. A long reply
+    # ends `..."&n` (emacsclient's escaped newline after the quote), which
+    # the old strip-the-quotes check missed (2026-10-12), so take the run.
+    match = re.search(r"[A-Za-z0-9+/]+={0,2}", out.stdout)
     try:
-        reply = json.loads(base64.b64decode(text).decode("utf-8"))
+        if not match:
+            raise ValueError("no base64 in the reply")
+        reply = json.loads(base64.b64decode(match.group(0)).decode("utf-8"))
     except (ValueError, UnicodeDecodeError):
         return None, "Unexpected reply from Emacs: %s" % out.stdout.strip()[:200]
     if reply.get("ok"):

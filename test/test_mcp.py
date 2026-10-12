@@ -93,6 +93,14 @@ class McpTest(unittest.TestCase):
         self.assertTrue(out[0]["result"]["isError"])
         self.assertIn("reach Emacs", out[0]["result"]["content"][0]["text"])
 
+    def test_a_long_reply_ending_in_an_escaped_newline_is_read(self):
+        """emacsclient ends a long reply `"&n`; it was read as garbage (2026-10-12)."""
+        out = self.run_session([{"jsonrpc": "2.0", "id": 9, "method": "tools/call",
+                                 "params": {"name": "crew_list", "arguments": {}}}],
+                               FAKE_REPLY=reply({"ok": True, "result": [{"id": "c-9"}]}).rstrip("\n") + "&n")
+        self.assertFalse(out[0]["result"]["isError"])
+        self.assertIn("c-9", out[0]["result"]["content"][0]["text"])
+
     def test_unknown_tool_and_method(self):
         out = self.run_session([
             {"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": {"name": "rm", "arguments": {}}},

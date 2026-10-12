@@ -49,6 +49,20 @@
       (should (= (length (alist-get 'result (crew-rpc-test--call "owner@my-app" root "mine"))) 0))
       (should (= (length (alist-get 'result (crew-rpc-test--call "owner@my-app" root "list"))) 1)))))
 
+(ert-deftest crew-rpc-mine-and-list-are-open-summaries ()
+  "A closed item is not listed, and a listed one carries no brief or log."
+  (crew-rpc-test--with root
+    (let ((open (alist-get 'id (alist-get 'result (crew-rpc-test--call "human" root "create"
+                                                                     '((title . "Open") (brief . "b") (owner . "owner@my-app")))))))
+      (let ((closed (alist-get 'id (alist-get 'result (crew-rpc-test--call "human" root "create"
+                                                                        '((title . "Closed") (brief . "b") (owner . "owner@my-app")))))))
+        (agent-shell-crew-queue-done root "owner@my-app" closed "done" t))
+      (dolist (verb '("mine" "list"))
+        (let ((items (alist-get 'result (crew-rpc-test--call "owner@my-app" root verb))))
+          (should (equal (mapcar (lambda (i) (alist-get 'id i)) items) (list open)))
+          (should-not (assq 'log (aref items 0)))
+          (should-not (assq 'brief (aref items 0))))))))
+
 (ert-deftest crew-rpc-actor-is-the-request-actor-not-an-arg ()
   (crew-rpc-test--with root
     (let* ((id (alist-get 'id (alist-get 'result (crew-rpc-test--call "human" root "create"
