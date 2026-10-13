@@ -771,7 +771,10 @@ resume.  The buffer is named after the member when it is created."
           ;; Name the buffer exactly after the member (the config's
           ;; :buffer-name) at creation; it must never be renamed later.
           (agent-shell-buffer-name-format (lambda (agent-name _project) agent-name)))
-      (agent-shell-start :config config))))
+      ;; agent-shell shows a new session in the selected window before
+      ;; returning; a member starting, or refreshed after every item,
+      ;; must not take over the window the human is typing in.
+      (save-window-excursion (agent-shell-start :config config)))))
 
 (defun agent-shell-crew--config-identity ()
   "Return (MEMBER . ROOT) from this buffer's crew MCP server, or nil."
@@ -815,15 +818,34 @@ session."
 A completion UI such as vertico submits the highlighted candidate on RET,
 so text that matches no option was never reachable without it.")
 
+(defun agent-shell-crew--last-list-start (question)
+  "Return where the last \"(1)\" in QUESTION starts, or nil."
+  (let ((pos 0) start)
+    (while (string-match "(1)" question pos)
+      (setq start (match-beginning 0) pos (match-end 0)))
+    start))
+
+(defun agent-shell-crew--decide-prompt (root item question options)
+  "The text above the decision prompt for ITEM of ROOT's crew.
+A header naming the item, then QUESTION filled to the frame's width.
+When OPTIONS were read from QUESTION, its list is cut: the options are
+the candidates below, and shown twice they made the question one block."
+  (with-temp-buffer
+    (insert (string-trim (if options
+                             (substring question 0 (agent-shell-crew--last-list-start question))
+                           question)))
+    (let ((fill-column (- (frame-width) 2)))
+      (fill-region (point-min) (point-max)))
+    (format "[%s] %s (%s)\n\n%s\n" (agent-shell-crew-project-name root)
+            (plist-get item :title) (plist-get item :id) (buffer-string))))
+
 (defun agent-shell-crew--options (question)
   "Return the numbered options written inline in QUESTION.
 Options look like \"(1) first; (2) second\".  Only the LAST list counts:
 it starts at the last \"(1)\" and runs while the numbers go up by one.
 A \"(1)\" earlier in the text -- \"Decision (1) is recorded, so ...\" --
 is prose, and reading it as an option recorded the wrong answer once."
-  (let ((start nil) (pos 0) (want 1) options)
-    (while (string-match "(1)" question pos)
-      (setq start (match-beginning 0) pos (match-end 0)))
+  (let ((start (agent-shell-crew--last-list-start question)) (want 1) options)
     (when start
       (while (and (string-match
                    "(\\([0-9]+\\))[ \t]*\\(.+?\\)[ \t]*\\(?:;\\|\\. \\|(\\([0-9]+\\))\\|\\.?\\'\\)"
@@ -891,13 +913,17 @@ tells the owner."
         (when (file-readable-p file)
           (display-buffer (find-file-noselect file) '(nil (inhibit-same-window . t))))))
     (let* ((options (agent-shell-crew--options question))
-           (picked (completing-read (format "%s\nDecision: " question)
+           (shown (agent-shell-crew--decide-prompt root item question options))
+           ;; A question runs to ten lines; at the default quarter of the
+           ;; frame the minibuffer cut it off or crowded out the options.
+           (max-mini-window-height 0.5)
+           (picked (completing-read (concat shown "Decision: ")
                                     (if options
                                         (append options (list agent-shell-crew--type-own))
                                       options)))
            (decision (string-trim
                       (if (equal picked agent-shell-crew--type-own)
-                          (read-string (format "%s\nYour decision: " question))
+                          (read-string (concat shown "Your decision: "))
                         picked))))
       (when (string-empty-p decision) (user-error "No decision given; nothing recorded"))
       (let ((owner (agent-shell-crew-queue-decide root id decision)))

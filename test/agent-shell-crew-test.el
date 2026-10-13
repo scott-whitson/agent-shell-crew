@@ -128,6 +128,25 @@
   (should (equal (agent-shell-crew--options "Steps (1), (3) done. (1) ship; (2) hold")
                  '("1 — ship" "2 — hold"))))
 
+(ert-deftest crew-decide-prompt-is-readable ()
+  "A ten-line question was one wrapped line, its options shown twice."
+  (let* ((question (concat (mapconcat (lambda (_) "The owner found a thing worth asking about.")
+                                      (number-sequence 1 8) " ")
+                           " Pick: (1) merge it; (2) send it back"))
+         (prompt (agent-shell-crew--decide-prompt
+                  "/x/my-app/" '(:title "Fix it" :id "crew-7")
+                  question (agent-shell-crew--options question))))
+    (should (string-prefix-p "[my-app] Fix it (crew-7)\n\n" prompt))
+    (should (string-match-p "Pick:\n\\'" prompt))
+    (should-not (string-match-p "(1)" prompt))
+    (should (> (length (split-string prompt "\n")) 4))
+    (dolist (line (split-string prompt "\n"))
+      (should (< (length line) (frame-width)))))
+  ;; No list, nothing cut.
+  (should (string-match-p "Ship (1) now\\?\n\\'"
+                          (agent-shell-crew--decide-prompt "/x/a/" '(:title "T" :id "i")
+                                                           "Ship (1) now?" nil))))
+
 (ert-deftest crew-new-creates-and-nudges ()
   (crew-main-test--with root
     (let ((told nil))
@@ -541,6 +560,16 @@
 (defun crew-fresh-test--starts ()
   "How many sessions the stub has started."
   (length (seq-filter (lambda (c) (eq (car c) 'start)) agent-shell-test--calls)))
+
+(ert-deftest crew-start-member-leaves-windows-alone ()
+  "agent-shell shows a new session in the selected window; a member starts unseen."
+  (crew-fresh-test--with root
+    (let ((start (symbol-function 'agent-shell-start))
+          (before (window-buffer)))
+      (cl-letf (((symbol-function 'agent-shell-start)
+                 (lambda (&rest args) (let ((b (apply start args))) (switch-to-buffer b) b))))
+        (should (agent-shell-crew--start-member root "owner" :socket "/s")))
+      (should (eq (window-buffer) before)))))
 
 (ert-deftest crew-fresh-member-gets-a-new-session-after-closing-an-item ()
   (crew-fresh-test--with root
