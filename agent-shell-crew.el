@@ -875,7 +875,7 @@ Returns the new item's id."
      (list root owner title brief (unless (string-empty-p evidence) evidence))))
   (let ((id (agent-shell-crew-queue-create root "human" :title title :brief brief
                                            :owner owner :evidence evidence)))
-    (agent-shell-crew--notify owner root (agent-shell-crew--nudge-text id title))
+    (agent-shell-crew--notify owner root (agent-shell-crew--nudge-text root id))
     (message "Created %s for %s" id owner)
     id))
 
@@ -928,7 +928,7 @@ tells the owner."
       (when (string-empty-p decision) (user-error "No decision given; nothing recorded"))
       (let ((owner (agent-shell-crew-queue-decide root id decision)))
         (agent-shell-crew--notify
-         owner root (format "Decision on crew item %s: %s.  Call crew_show with id %s." id decision id))
+         owner root (agent-shell-crew--decision-text root id decision))
         (message "Decided %s" id)))))
 
 ;;;###autoload

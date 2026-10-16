@@ -172,7 +172,10 @@
         (should (equal (plist-get item :state) "ACTIVE"))
         (should (equal (plist-get item :decision) "1 — a")))
       (should (equal (car (car told)) "owner@my-app"))
-      (should (string-match-p "1 — a" (nth 1 (car told)))))))
+      (should (string-match-p "1 — a" (nth 1 (car told))))
+      ;; The question it answers rides along, so no crew_show is needed.
+      (should (string-match-p "Pick (1) a; (2) b" (nth 1 (car told))))
+      (should-not (string-match-p "crew_show" (nth 1 (car told)))))))
 
 (ert-deftest crew-decide-offers-a-typed-decision-beside-the-options ()
   "Approving an option the owner cannot carry out needs words of your own."

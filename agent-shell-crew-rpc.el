@@ -57,9 +57,37 @@ Never signals."
   "Return OBJECT as base64-encoded JSON."
   (base64-encode-string (encode-coding-string (json-encode object) 'utf-8) t))
 
-(defun agent-shell-crew--nudge-text (id title)
-  "Return the one-line nudge for new item ID titled TITLE."
-  (format "New crew item %s for you: %s. Call crew_show with id %s." id title id))
+(defvar agent-shell-crew-nudge-max-chars 4000
+  "How much of an item's brief a nudge carries.
+A longer brief is cut there, and the nudge says to call crew_show for the
+rest.  Carrying the brief spares the member a crew_show call per item.")
+
+(defun agent-shell-crew--nudge-body (id body)
+  "Return BODY for item ID, cut at `agent-shell-crew-nudge-max-chars'.
+Empty when BODY is nil or blank."
+  (let ((body (string-trim (or body ""))))
+    (cond ((string-empty-p body) "")
+          ((> (length body) agent-shell-crew-nudge-max-chars)
+           (format "\n\n%s\n[cut at %d characters] Call crew_show with id %s for the rest."
+                   (substring body 0 agent-shell-crew-nudge-max-chars)
+                   agent-shell-crew-nudge-max-chars id))
+          (t (concat "\n\n" body)))))
+
+(defun agent-shell-crew--nudge-text (root id)
+  "Return the nudge for new item ID in ROOT: its title, brief and checkpoint."
+  (let* ((item (agent-shell-crew-queue-get root id))
+         (checkpoint (plist-get item :checkpoint)))
+    (concat (format "New crew item %s for you: %s." id (plist-get item :title))
+            (agent-shell-crew--nudge-body
+             id (concat (plist-get item :brief)
+                        (when checkpoint (concat "\n\nCheckpoint: " checkpoint)))))))
+
+(defun agent-shell-crew--decision-text (root id decision)
+  "Return the nudge for DECISION on item ID in ROOT, with its question."
+  (concat (format "Decision on crew item %s: %s." id decision)
+          (agent-shell-crew--nudge-body
+           id (when-let* ((q (plist-get (agent-shell-crew-queue-get root id) :question)))
+                (concat "It answers: " q)))))
 
 (defun agent-shell-crew--item-json (item)
   "Return ITEM, a plist, as an alist for `json-encode'."
@@ -137,7 +165,7 @@ URGENT non-nil asks for the text to be steered into a running turn."
                                                     :status (funcall arg 'status)
                                                     :branch (funcall arg 'branch)
                                                     :request request)))
-             (agent-shell-crew--rpc-notify owner root (agent-shell-crew--nudge-text id title)
+             (agent-shell-crew--rpc-notify owner root (agent-shell-crew--nudge-text root id)
                                            (eq (funcall arg 'urgent) t))
              `((id . ,id))))))
       ("claim" (agent-shell-crew-queue-claim root actor (funcall arg 'id t)) '((done . t)))
@@ -151,9 +179,8 @@ URGENT non-nil asks for the text to be steered into a running turn."
            (let* ((new (agent-shell-crew-queue-handoff root actor (funcall arg 'id t) to
                                                        (funcall arg 'summary t) (funcall arg 'brief)
                                                        (funcall arg 'status) (funcall arg 'branch)
-                                                       request))
-                  (title (plist-get (agent-shell-crew-queue-get root new) :title)))
-             (agent-shell-crew--rpc-notify to root (agent-shell-crew--nudge-text new title))
+                                                       request)))
+             (agent-shell-crew--rpc-notify to root (agent-shell-crew--nudge-text root new))
              (agent-shell-crew--rpc-closed actor root (funcall arg 'id t))
              `((id . ,new))))))
       ("checkpoint" (agent-shell-crew-queue-checkpoint root actor (funcall arg 'id t)

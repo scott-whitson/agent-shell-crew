@@ -194,7 +194,11 @@ Project rules (build, test, conventions) come from the repository's own
 ## Nudges
 
 When an item is created for, or handed to, a member, Emacs sends that session
-one line: *"New crew item c-… for you: TITLE. Call crew_show."*
+the item: *"New crew item c-… for you: TITLE."*, then its brief and its
+checkpoint, so the member starts without a `crew_show` call (about one per
+item before, measured 2026-10-16). A brief longer than
+`agent-shell-crew-nudge-max-chars` (4000) is cut there with "Call crew_show
+with id c-… for the rest." A decision nudge carries the question it answers.
 
 - **Busy session:** `agent-shell-busy-submit-queue`, so it arrives when the
   current turn ends. Nothing is typed into a running turn.

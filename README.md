@@ -142,6 +142,7 @@ cut: an interruption leaves an item in both, never in neither.
 | `agent-shell-crew-stages` | none; or `:stages` in a profile |
 | `agent-shell-crew-check-minutes` | `5` |
 | `agent-shell-crew-archive-days` | `7`; `nil` never archives |
+| `agent-shell-crew-nudge-max-chars` | `4000`: how much of a brief a nudge carries |
 
 To show parked items in your agenda:
 `(add-to-list 'org-agenda-files agent-shell-crew-directory)`.
@@ -179,6 +180,10 @@ Two settings carry most of the saving:
 Measured on one crew, a full day before and after: average context per
 call fell from 476k to 75k tokens, and cache reads per closed item from
 11.2M to 2.9M. No session hit its usage limit.
+
+A nudge carries the item's brief and checkpoint, so a member starts work
+without a `crew_show` call; a brief past `agent-shell-crew-nudge-max-chars`
+is cut, and the nudge says to call `crew_show` for the rest.
 
 Session names change on every fresh start. Address members through crew
 items (`crew_create`, `crew_handoff` to `role@project`), never by session

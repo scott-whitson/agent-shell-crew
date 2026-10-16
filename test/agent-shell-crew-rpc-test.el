@@ -242,5 +242,50 @@
         (should (seq-find (lambda (l) (string-match-p "usage: 1.23, context 46k" l))
                           (plist-get item :log)))))))
 
+(ert-deftest crew-rpc-a-nudge-carries-the-brief ()
+  "The member reads its work in the nudge, not in a second call."
+  (crew-rpc-test--with root
+    (let* ((id (alist-get 'id (alist-get 'result
+                (crew-rpc-test--call "human" root "create"
+                                     '((title . "Fix it") (brief . "Line one.\nLine two.")
+                                       (owner . "owner@my-app"))))))
+           (text (nth 2 (car crew-rpc-test--notified))))
+      (should (string-prefix-p (format "New crew item %s for you: Fix it." id) text))
+      (should (string-match-p "Line one\\.\nLine two\\." text))
+      (should-not (string-match-p "crew_show" text)))))
+
+(ert-deftest crew-rpc-a-handoff-nudge-carries-the-summary ()
+  (crew-rpc-test--with root
+    (let ((id (alist-get 'id (alist-get 'result
+               (crew-rpc-test--call "human" root "create"
+                                    '((title . "T") (brief . "b") (owner . "owner@my-app")))))))
+      (crew-rpc-test--call "owner@my-app" root "claim" `((id . ,id)))
+      (crew-rpc-test--call "owner@my-app" root "handoff"
+                           `((id . ,id) (to . "check@my-app") (summary . "Built on crew/x")))
+      (let ((text (nth 2 (car crew-rpc-test--notified))))
+        (should (equal (car (car crew-rpc-test--notified)) "check@my-app"))
+        (should (string-match-p "Built on crew/x" text))))))
+
+(ert-deftest crew-rpc-a-long-brief-is-cut-and-points-at-crew-show ()
+  (crew-rpc-test--with root
+    (let* ((agent-shell-crew-nudge-max-chars 20)
+           (id (alist-get 'id (alist-get 'result
+                (crew-rpc-test--call "human" root "create"
+                                     `((title . "T") (brief . ,(make-string 100 ?x))
+                                       (owner . "owner@my-app"))))))
+           (text (nth 2 (car crew-rpc-test--notified))))
+      (should (string-match-p (regexp-quote (make-string 20 ?x)) text))
+      (should-not (string-match-p (regexp-quote (make-string 21 ?x)) text))
+      (should (string-match-p (format "Call crew_show with id %s" (regexp-quote id)) text)))))
+
+(ert-deftest crew-rpc-a-nudge-carries-the-checkpoint ()
+  (crew-rpc-test--with root
+    (let ((id (agent-shell-crew-queue-create root "human" :title "T" :owner "owner@my-app"
+                                             :brief "b")))
+      (agent-shell-crew-queue-claim root "owner@my-app" id)
+      (agent-shell-crew-queue-checkpoint root "owner@my-app" id "phase 2 | next: tests")
+      (should (string-match-p "Checkpoint: phase 2 | next: tests"
+                              (agent-shell-crew--nudge-text root id))))))
+
 (provide 'agent-shell-crew-rpc-test)
 ;;; agent-shell-crew-rpc-test.el ends here
