@@ -324,6 +324,20 @@ The board's Cost column sums a piece of work's items. With a fresh context
 per item the figure is the item's own; without it, it is the spend between
 two closes.
 
+## Trying a change: the pass rule comes first
+
+A setting, a brief rule or a new behaviour is tried on a crew before it is
+kept. Write the trial's pass rule before it starts, in the plan that
+introduces it: the measure (an item's `:COST:`, the context logged at close,
+items handed back by a checker, red gates), the bar, what it is compared
+against (the same crew before the change, or a member left without it over
+the same days), and what happens on a fail (turn it off). Then record the
+result in that plan, pass or fail. A failed trial stays written down, so it
+is not tried again by someone who never saw it.
+
+A rule written after an incident is a change like any other. Without a
+measure it is never re-checked, and briefs only grow.
+
 ## Health, stuck members and recovery
 
 One dot answers "is the crew all right?" without opening anything: red

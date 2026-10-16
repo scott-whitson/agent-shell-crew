@@ -1,6 +1,6 @@
 # Durable ideas: fresh context per item, idempotent calls, cancel cascade
 
-**Status: built 2026-10-07 (§1-§4); §5 is in the briefs. The live trial is open.**
+**Status: built 2026-10-07 (§1-§4); §5 is in the briefs. The live trial is open; its pass rule was written 2026-10-16 (Tasks).**
 Source: a review of `@earendil-works/pi-durable` (README, 2026-10-07) against
 this package. Pi's harness commits every step before showing it, resets a
 conversation to a handoff note, de-duplicates retried submissions by
@@ -137,3 +137,12 @@ sentence) stays plain prose. The package documents the format in
 - [x] design.md: sections for each, and "Alternatives considered" gains pi-durable.
 - [ ] Live: one pearl lane with `:fresh-per-item t` for a day; compare its
       average context per call with today's 258k to 814k.
+      *2026-10-16:* the pearl profile already has it on for owner, check and
+      gate, with no result recorded here, so it was kept without a pass rule
+      (design.md "Trying a change: the pass rule comes first"). The rule,
+      measured before and after 2026-10-07 from the queue's close lines
+      ("usage: …, context …") and `:COST:`: **pass** if the median context
+      at close is at most 150k, the median `:COST:` per item is no higher
+      than before, and checkers hand back no larger a share of items.
+      **Fail**: turn it off for that role and write down why. Record the
+      numbers here either way. *Not reached:* the measurement has not run.
