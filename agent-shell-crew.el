@@ -429,6 +429,13 @@ needs messages waiting and why it is off by default."
   :type 'boolean
   :group 'agent-shell-crew)
 
+(defconst agent-shell-crew--interrupted-text
+  (concat "Your last turn was interrupted by the crew's stall recovery, so its last "
+          "action may not have finished. Check git status and your checkpoint before "
+          "you carry on, and re-run anything that was cut off.")
+  "Sent to a member that recovery interrupted.
+Without it, a member can take an interrupted commit or test run as done.")
+
 (defun agent-shell-crew--recover (buffer)
   "Unstick the member session in BUFFER; return what was done, or nil."
   (with-current-buffer buffer
@@ -452,6 +459,8 @@ needs messages waiting and why it is off by default."
         nil)
        ((shell-maker-busy)
         (agent-shell-interrupt t)
+        ;; Held with the rest, so it arrives with them when the turn ends.
+        (agent-shell-crew--deliver buffer agent-shell-crew--interrupted-text)
         "interrupted it; its queue resumes on the next check")
        ((> queued 0)
         (agent-shell-prompt-queue-resume)

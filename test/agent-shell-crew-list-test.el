@@ -296,7 +296,11 @@
       (cl-letf (((symbol-function 'agent-shell-crew--say) (lambda (tx) (push tx said))))
         (agent-shell-crew--watch))
       (should (equal (mapcar #'car (crew-list-test--recover-calls)) '(interrupt)))
-      (should (string-match-p "owner@my-app was stuck .*; interrupted it" (car said))))))
+      (should (string-match-p "owner@my-app was stuck .*; interrupted it" (car said)))
+      ;; It is told its last action may not have finished.
+      (should (member agent-shell-crew--interrupted-text
+                      (buffer-local-value 'agent-shell-crew--pending
+                                          (agent-shell-crew--member-buffer "owner@my-app" root)))))))
 
 (ert-deftest crew-recover-resumes-a-paused-queue ()
   (crew-list-test--with root
