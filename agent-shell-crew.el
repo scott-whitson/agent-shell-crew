@@ -609,14 +609,26 @@ already running."
 (defvar-local agent-shell-crew--cost-baseline 0
   "The session's cost when this member last closed an item.")
 
+(defun agent-shell-crew--brief-fingerprint (spec)
+  "A short fingerprint of the brief and protocol a member with SPEC is given.
+It changes when either text changes, so a report can tell versions apart."
+  (when spec
+    (substring (sha1 (concat (agent-shell-crew--brief (plist-get spec :role) (plist-get spec :brief))
+                             "\n" (if agent-shell-crew-protocol
+                                      (agent-shell-crew--text agent-shell-crew-protocol)
+                                    "")))
+               0 8)))
+
 (defun agent-shell-crew--item-closed (member root id)
   "MEMBER of ROOT's crew closed or handed off item ID.
 Records on ID what the member's session spent since its last close (see
-`agent-shell-crew-queue-record-usage'), then marks the member due a
-fresh context (see `agent-shell-crew--fresh-due')."
+`agent-shell-crew-queue-record-usage') and which brief and model did the
+work (see `agent-shell-crew-queue-record-run'), then marks the member due
+a fresh context (see `agent-shell-crew--fresh-due')."
   (when-let* ((buffer (agent-shell-crew--member-buffer member root)))
     (with-current-buffer buffer
-      (let* ((usage (map-elt (bound-and-true-p agent-shell--state) :usage))
+      (let* ((state (bound-and-true-p agent-shell--state))
+             (usage (map-elt state :usage))
              (cost (or (map-elt usage :cost-amount) 0))
              (spent (max 0 (- cost agent-shell-crew--cost-baseline))))
         (setq agent-shell-crew--cost-baseline cost)
@@ -624,7 +636,13 @@ fresh context (see `agent-shell-crew--fresh-due')."
           (condition-case err
               (agent-shell-crew-queue-record-usage root id spent (map-elt usage :context-used))
             (error (message "agent-shell-crew: usage for %s not recorded: %s"
-                            id (error-message-string err))))))))
+                            id (error-message-string err)))))
+        (condition-case err
+            (agent-shell-crew-queue-record-run
+             root id (agent-shell-crew--brief-fingerprint agent-shell-crew--spec)
+             (map-nested-elt state '(:session :model-id)))
+          (error (message "agent-shell-crew: brief and model for %s not recorded: %s"
+                          id (error-message-string err)))))))
   (agent-shell-crew--fresh-due member root))
 
 (defun agent-shell-crew--fresh-due (member root)

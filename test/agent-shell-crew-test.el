@@ -756,4 +756,22 @@
       (should (= (plist-get (agent-shell-crew-queue-get root a) :cost) 1.5))
       (should (= (plist-get (agent-shell-crew-queue-get root b) :cost) 0.75)))))
 
+(ert-deftest crew-closing-an-item-records-the-brief-and-model-that-did-it ()
+  (crew-fresh-test--with root
+    (let ((member (agent-shell-crew--start-member root "owner" :socket "/s"))
+          (a (agent-shell-crew-queue-create root "human" :title "A" :owner "owner@my-app"))
+          (b (agent-shell-crew-queue-create root "human" :title "B" :owner "owner@my-app")))
+      (with-current-buffer member
+        (setq agent-shell--state (list (cons :session (list (cons :model-id "opus"))))))
+      (agent-shell-crew--item-closed "owner@my-app" root a)
+      (let ((item (agent-shell-crew-queue-get root a)))
+        (should (equal (plist-get item :model) "opus"))
+        (should (string-match-p "\\`[0-9a-f]\\{8\\}\\'" (plist-get item :brief-version))))
+      ;; Another brief text, another fingerprint.
+      (with-current-buffer member
+        (setq agent-shell-crew--spec (plist-put (copy-sequence agent-shell-crew--spec) :brief "Other text.")))
+      (agent-shell-crew--item-closed "owner@my-app" root b)
+      (should-not (equal (plist-get (agent-shell-crew-queue-get root a) :brief-version)
+                         (plist-get (agent-shell-crew-queue-get root b) :brief-version))))))
+
 ;;; agent-shell-crew-test.el ends here

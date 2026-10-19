@@ -270,6 +270,8 @@ this call; see `agent-shell-crew-queue-find-request'."
           :branch (org-entry-get nil "BRANCH")
           :checkpoint (org-entry-get nil "CHECKPOINT")
           :cost (when-let* ((c (org-entry-get nil "COST"))) (string-to-number c))
+          :brief-version (org-entry-get nil "BRIEF_VERSION")
+          :model (org-entry-get nil "MODEL")
           :question (org-entry-get nil "QUESTION")
           :decision (org-entry-get nil "DECISION")
           :brief (string-trim (buffer-substring-no-properties
@@ -401,6 +403,18 @@ behalf, so it works on a closed item and needs no owner."
       (org-entry-put nil "COST" (format "%.2f" total)))
     (agent-shell-crew--log "usage: %.2f%s" cost
                            (if (numberp context) (format ", context %dk" (round context 1000)) ""))))
+
+(defun agent-shell-crew-queue-record-run (root id brief model)
+  "Record on item ID in ROOT's queue what did the work: BRIEF and MODEL.
+BRIEF is a short fingerprint of the brief text the member started with,
+MODEL the agent's model id; either may be nil.  Written by the crew
+itself, like `agent-shell-crew-queue-record-usage', so outcomes can be
+compared per brief version and model."
+  (agent-shell-crew--mutate root id 'run
+    (unless (agent-shell-crew--blank-p brief)
+      (org-entry-put nil "BRIEF_VERSION" (agent-shell-crew--clean-line brief)))
+    (unless (agent-shell-crew--blank-p model)
+      (org-entry-put nil "MODEL" (agent-shell-crew--clean-line model)))))
 
 (defun agent-shell-crew-queue-park (root actor id question &optional evidence status)
   "ACTOR parks item ID in ROOT's queue on the human with QUESTION.
