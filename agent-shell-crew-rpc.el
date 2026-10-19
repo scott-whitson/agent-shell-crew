@@ -62,6 +62,24 @@ Never signals."
 A longer brief is cut there, and the nudge says to call crew_show for the
 rest.  Carrying the brief spares the member a crew_show call per item.")
 
+(defvar agent-shell-crew-handoff-format
+  "\\`ITEM [^ |\n]+ | [A-Z]+ |[^\n]*\\'"
+  "Regexp a hand-off summary to another member must match, or nil.
+The protocol's line of fields (see `agent-shell-crew-protocol').  A
+summary for the human is never checked: the human reads prose.")
+
+(defun agent-shell-crew--rpc-check-summary (to summary)
+  "Fail when SUMMARY, handed to TO, is not in `agent-shell-crew-handoff-format'.
+The refusal shows the shape, so the agent can send it again in it."
+  (when (and agent-shell-crew-handoff-format (stringp summary) (not (equal to "human"))
+             (not (string-match-p agent-shell-crew-handoff-format (string-trim summary))))
+    (agent-shell-crew--fail
+     "Hand-off refused: a summary for another member is ONE line of fields, \
+ITEM <id> | <DONE|HANDED|PARKED> | branch <b> | sha <s> | tests <n>p/<n>f | next: <who/what> \
+\(add \"| why: ...\" if needed; put detail in `brief').  Yours began: %S.  Nothing was handed \
+off; send it again in that shape"
+     (truncate-string-to-width (car (split-string summary "\n")) 60 nil nil "..."))))
+
 (defun agent-shell-crew--nudge-body (id body)
   "Return BODY for item ID, cut at `agent-shell-crew-nudge-max-chars'.
 Empty when BODY is nil or blank."
@@ -195,6 +213,7 @@ URGENT non-nil asks for the text to be steered into a running turn."
          (if-let* ((old (agent-shell-crew-queue-find-request root actor request)))
              `((id . ,old) (duplicate . t))
            (agent-shell-crew--rpc-check-member root to)
+           (agent-shell-crew--rpc-check-summary to (funcall arg 'summary t))
            (let* ((new (agent-shell-crew-queue-handoff root actor (funcall arg 'id t) to
                                                        (funcall arg 'summary t) (funcall arg 'brief)
                                                        (funcall arg 'status) (funcall arg 'branch)

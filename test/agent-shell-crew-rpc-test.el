@@ -86,7 +86,7 @@
       (crew-rpc-test--call "owner@my-app" root "claim" `((id . ,id)))
       (crew-rpc-test--call "owner@my-app" root "note" `((id . ,id) (text . "started")))
       (let* ((reply (crew-rpc-test--call "owner@my-app" root "handoff"
-                                         `((id . ,id) (to . "check@my-app") (summary . "built"))))
+                                         `((id . ,id) (to . "check@my-app") (summary . "ITEM t | HANDED | branch crew/x | sha 1 | tests 1p/0f | next: check"))))
              (new (alist-get 'id (alist-get 'result reply))))
         (should (eq (alist-get 'ok reply) t))
         (should (equal (car (car crew-rpc-test--notified)) "check@my-app"))
@@ -153,7 +153,7 @@
   (crew-rpc-test--with root
     (let ((id (crew-rpc-test--create "human" root "owner@my-app")))
       (crew-rpc-test--call "owner@my-app" root "claim" `((id . ,id)))
-      (let* ((args `((id . ,id) (to . "check@my-app") (summary . "s") (request_id . "h-1")))
+      (let* ((args `((id . ,id) (to . "check@my-app") (summary . "ITEM t | HANDED | branch crew/x | sha 1 | tests 1p/0f | next: check") (request_id . "h-1")))
              (one (crew-rpc-test--call "owner@my-app" root "handoff" args))
              (two (crew-rpc-test--call "owner@my-app" root "handoff" args)))
         (should (eq (alist-get 'ok two) t))
@@ -261,10 +261,10 @@
                                     '((title . "T") (brief . "b") (owner . "owner@my-app")))))))
       (crew-rpc-test--call "owner@my-app" root "claim" `((id . ,id)))
       (crew-rpc-test--call "owner@my-app" root "handoff"
-                           `((id . ,id) (to . "check@my-app") (summary . "Built on crew/x")))
+                           `((id . ,id) (to . "check@my-app") (summary . "ITEM t | HANDED | branch crew/x | sha 1 | tests 1p/0f | next: check")))
       (let ((text (nth 2 (car crew-rpc-test--notified))))
         (should (equal (car (car crew-rpc-test--notified)) "check@my-app"))
-        (should (string-match-p "Built on crew/x" text))))))
+        (should (string-match-p (regexp-quote "branch crew/x") text))))))
 
 (ert-deftest crew-rpc-a-long-brief-is-cut-and-points-at-crew-show ()
   (crew-rpc-test--with root
@@ -336,9 +336,64 @@
                                                                    '((title . "29") (owner . "owner@my-app") (ref . "29")))))))
       (agent-shell-crew-queue-claim root "owner@my-app" id)
       (let ((reply (crew-rpc-test--call "owner@my-app" root "handoff"
-                                        `((id . ,id) (to . "check@my-app") (summary . "ITEM x | HANDED")))))
+                                        `((id . ,id) (to . "check@my-app") (summary . "ITEM t | HANDED | branch crew/x | sha 1 | tests 1p/0f | next: check")))))
         (should (eq (alist-get 'ok reply) t))
         (should (equal (plist-get (agent-shell-crew-queue-get root (alist-get 'id (alist-get 'result reply))) :ref)
                        "29"))))))
+
+;;; The hand-off line
+
+(defun crew-rpc-test--active (root)
+  "An item owner@my-app has claimed in ROOT; its id."
+  (let ((id (alist-get 'id (alist-get 'result (crew-rpc-test--call "human" root "create"
+                                                                 '((title . "T") (owner . "owner@my-app")))))))
+    (crew-rpc-test--call "owner@my-app" root "claim" `((id . ,id)))
+    id))
+
+(ert-deftest crew-rpc-a-prose-handoff-to-a-member-is-refused-with-the-shape ()
+  (crew-rpc-test--with root
+    (let* ((id (crew-rpc-test--active root))
+           (reply (crew-rpc-test--call "owner@my-app" root "handoff"
+                                       `((id . ,id) (to . "check@my-app")
+                                         (summary . "I built the thing and it all works now.")))))
+      (should (eq (alist-get 'ok reply) :false))
+      (should (string-match-p "ITEM <id> | <DONE|HANDED|PARKED>" (alist-get 'error reply)))
+      (should (string-match-p "I built the thing" (alist-get 'error reply)))
+      ;; Nothing happened: still the owner's, still ACTIVE, nobody told.
+      (should (equal (plist-get (agent-shell-crew-queue-get root id) :state) "ACTIVE"))
+      (should-not (assoc "check@my-app" crew-rpc-test--notified)))))
+
+(ert-deftest crew-rpc-a-two-line-summary-is-refused ()
+  (crew-rpc-test--with root
+    (let ((id (crew-rpc-test--active root)))
+      (should (eq (alist-get 'ok (crew-rpc-test--call "owner@my-app" root "handoff"
+                                                     `((id . ,id) (to . "check@my-app")
+                                                       (summary . "ITEM t | HANDED | branch b\nand more prose"))))
+                  :false)))))
+
+(ert-deftest crew-rpc-a-handoff-to-the-human-is-not-checked ()
+  (crew-rpc-test--with root
+    (let ((id (crew-rpc-test--active root)))
+      (should (eq (alist-get 'ok (crew-rpc-test--call "owner@my-app" root "handoff"
+                                                     `((id . ,id) (to . "human")
+                                                       (summary . "Please look at this when you can."))))
+                  t)))))
+
+(ert-deftest crew-rpc-the-handoff-check-can-be-turned-off ()
+  (crew-rpc-test--with root
+    (let ((id (crew-rpc-test--active root))
+          (agent-shell-crew-handoff-format nil))
+      (should (eq (alist-get 'ok (crew-rpc-test--call "owner@my-app" root "handoff"
+                                                     `((id . ,id) (to . "check@my-app") (summary . "built"))))
+                  t)))))
+
+(ert-deftest crew-rpc-a-handoff-with-why-and-steered-fields-passes ()
+  (crew-rpc-test--with root
+    (let ((id (crew-rpc-test--active root)))
+      (should (eq (alist-get 'ok (crew-rpc-test--call
+                                  "owner@my-app" root "handoff"
+                                  `((id . ,id) (to . "check@my-app")
+                                    (summary . "ITEM t | HANDED | branch b | sha 1 | tests 3p/0f | next: check | steered: drop X | why: asked"))))
+                  t)))))
 
 ;;; agent-shell-crew-rpc-test.el ends here

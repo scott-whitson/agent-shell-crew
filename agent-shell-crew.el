@@ -60,6 +60,15 @@ agent-shell config (see `agent-shell-make-agent-config')."
   :type '(alist :key-type string :value-type plist)
   :group 'agent-shell-crew)
 
+(defcustom agent-shell-crew-protocol
+  (expand-file-name "briefs/protocol.md" agent-shell-crew--package-dir)
+  "How every member hands off, checkpoints and reaches the others.
+A file name or the text itself, sent after each member's brief, so the
+briefs need not repeat it; nil sends none.  Seven briefs once carried
+their own copies, and the copies drifted apart."
+  :type '(choice (const :tag "None" nil) file string)
+  :group 'agent-shell-crew)
+
 (defcustom agent-shell-crew-mcp-program
   (expand-file-name "bin/agent-shell-crew-mcp" agent-shell-crew--package-dir)
   "The crew MCP program each session starts."
@@ -191,15 +200,18 @@ NAME, when non-nil, is the member's name instead of ROLE."
                   (list (agent-shell-crew--mcp-server member root socket))))
     config))
 
+(defun agent-shell-crew--text (text)
+  "Return TEXT, or the contents of the file it names when it is one."
+  (let ((file (and (file-name-absolute-p text) (expand-file-name text))))
+    (if (and file (file-readable-p file))
+        (with-temp-buffer (insert-file-contents file) (string-trim (buffer-string)))
+      text)))
+
 (defun agent-shell-crew--brief (role &optional override)
   "Return the brief text for ROLE, or OVERRIDE when non-nil.
 Either may be an absolute file name or the text itself; no brief at
 all is the empty string."
-  (let ((brief (or override (plist-get (agent-shell-crew--role role) :brief) "")))
-    (let ((file (and (file-name-absolute-p brief) (expand-file-name brief))))
-      (if (and file (file-readable-p file))
-          (with-temp-buffer (insert-file-contents file) (string-trim (buffer-string)))
-        brief))))
+  (agent-shell-crew--text (or override (plist-get (agent-shell-crew--role role) :brief) "")))
 
 (defun agent-shell-crew--intro (role member root &optional brief)
   "Return the first prompt for MEMBER, who has ROLE in ROOT's crew.
@@ -209,6 +221,9 @@ BRIEF overrides ROLE's brief."
     (concat (format "You are %s, the %s in this project's crew.  Your crew identity is %s; the crew_* tools act as you.\n\n"
                     member role member)
             (agent-shell-crew--brief role brief)
+            (if agent-shell-crew-protocol
+                (concat "\n\n" (agent-shell-crew--text agent-shell-crew-protocol))
+              "")
             (if owned
                 (format "\n\nYou already own: %s.  Start with crew_mine."
                         (mapconcat (lambda (item)

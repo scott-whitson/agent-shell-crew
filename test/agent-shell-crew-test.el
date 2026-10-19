@@ -68,6 +68,28 @@
         (should (string-match-p "You are owner@my-app" (nth 1 (car inserts))))
         (should (string-match-p "You build" (nth 1 (car inserts))))))))
 
+(ert-deftest crew-intro-carries-the-protocol-once-after-the-brief ()
+  (let ((intro (agent-shell-crew--intro "owner" "owner@my-app" (make-temp-file "crew-root" t))))
+    (should (string-match-p "You build" intro))
+    (should (= (with-temp-buffer (insert intro) (goto-char (point-min)) (how-many "^HAND-OFFS\\."))
+               1))
+    (should (< (string-match "You build" intro) (string-match "HAND-OFFS" intro)))))
+
+(ert-deftest crew-intro-without-protocol ()
+  (let ((agent-shell-crew-protocol nil))
+    (should-not (string-match-p "HAND-OFFS"
+                                (agent-shell-crew--intro "owner" "owner@my-app" (make-temp-file "crew-root" t)))))
+  (let ((agent-shell-crew-protocol "Our own rules."))
+    (should (string-match-p "Our own rules\\.\\'"
+                            (agent-shell-crew--intro "owner" "owner@my-app" (make-temp-file "crew-root" t))))))
+
+(ert-deftest crew-shipped-briefs-leave-the-protocol-to-the-package ()
+  "Seven briefs carried their own copies, and the copies drifted."
+  (dolist (role '("lead" "owner" "check"))
+    (with-temp-buffer
+      (insert-file-contents (expand-file-name (format "briefs/%s.md" role) agent-shell-crew--package-dir))
+      (should-not (search-forward "one line of fields" nil t)))))
+
 (ert-deftest crew-start-skips-running-member ()
   (crew-main-test--with root
     (agent-shell-crew-start root '("owner"))
