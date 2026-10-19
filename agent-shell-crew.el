@@ -245,7 +245,7 @@ name; ROOT tells them apart."
               (buffer-list))))
 
 (defun agent-shell-crew--input-empty-p (buffer)
-  "Non-nil when BUFFER's shell input holds no text.
+  "Non-nil when BUFFER's shell input is empty.
 Anything uncertain counts as not empty, so a draft is never submitted."
   (with-current-buffer buffer
     (condition-case nil
@@ -318,7 +318,7 @@ that found nothing, each re-reading its whole context."
         (agent-shell-crew--deliver buffer (agent-shell-crew--combine texts))))))
 
 (defun agent-shell-crew--turn-ended (buffer)
-  "BUFFER's turn has ended: refresh it if due, else deliver what it holds.
+  "Refresh BUFFER if due now its turn has ended, else deliver its held nudges.
 A refresh carries the held nudges into the new session, so new work
 starts in a fresh context rather than at the end of the old one."
   (unless (agent-shell-crew--maybe-refresh buffer)
@@ -475,7 +475,7 @@ Without it, a member can take an interrupted commit or test run as done.")
   (message "%s" text))
 
 (defun agent-shell-crew--deliver-stranded (buffer)
-  "Deliver what BUFFER holds if it is ready, idle and its input is empty.
+  "Deliver BUFFER's held nudges if it is ready, idle and its input is empty.
 The backstop for a turn end that never reached the buffer."
   (when (and (buffer-local-value 'agent-shell-crew--pending buffer)
              (buffer-local-value 'agent-shell-crew--ready buffer)
@@ -899,7 +899,7 @@ A completion UI such as vertico submits the highlighted candidate on RET,
 so text that matches no option was never reachable without it.")
 
 (defun agent-shell-crew--last-list-start (question)
-  "Return where the last \"(1)\" in QUESTION starts, or nil."
+  "Return the start of the last \"(1)\" in QUESTION, or nil."
   (let ((pos 0) start)
     (while (string-match "(1)" question pos)
       (setq start (match-beginning 0) pos (match-end 0)))

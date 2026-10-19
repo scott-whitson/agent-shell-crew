@@ -91,7 +91,7 @@ projects in folders with the same name never share a queue."
       (revert-buffer t t t))))
 
 (defun agent-shell-crew--discard-changes ()
-  "Throw away unsaved changes in the current queue buffer.
+  "Throw away what is unsaved in the current queue buffer.
 Called when a write fails part-way, so a half-written item is never
 saved and never mistaken for a human's unsaved edit."
   (if (and (buffer-file-name) (file-exists-p (buffer-file-name)))
@@ -168,7 +168,7 @@ Point does not move, so the item can still be read afterwards."
   (string-trim (replace-regexp-in-string "[\n\r\t ]+" " " (or text ""))))
 
 (defun agent-shell-crew--escape-body (text)
-  "Keep TEXT inside an item: indent any line that starts with a star."
+  "Keep TEXT inside an item: indent every line beginning with a star."
   (replace-regexp-in-string "^\\*" " *" (string-trim-right text)))
 
 (defun agent-shell-crew--put-outcome (status branch)

@@ -133,7 +133,7 @@ branch is the first thing anyone cleans up."
   "The (ROOT . STAGE) checks running now.")
 
 (defun agent-shell-crew-board--store (key commit)
-  "Remember COMMIT as the answer for check KEY, and refresh what shows it."
+  "Remember COMMIT as the answer for check KEY, and refresh its display."
   (setf (alist-get key agent-shell-crew-board--checks nil nil #'equal) (cons (current-time) commit))
   (setq agent-shell-crew-board--running (delete key agent-shell-crew-board--running))
   (agent-shell-crew-board--recompute (car key))
@@ -272,7 +272,7 @@ MERGED is `yes', `no', `unknown' or `none' (no branch).  Each stage is
   :group 'agent-shell-crew)
 
 (defun agent-shell-crew-board--state-label (row progress)
-  "ROW's state as the board shows it, given its PROGRESS.
+  "Return ROW's state for the board, given its PROGRESS.
 Finished work whose branch has reached the trunk reads MERGED: the one
 fact a Merged column used to spend seven characters on."
   (let ((state (or (plist-get row :state) "")))

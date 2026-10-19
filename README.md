@@ -135,6 +135,8 @@ cut: an interruption leaves an item in both, never in neither.
 | `agent-shell-crew-roles` | `lead`, `owner`, `check`, with the briefs in `briefs/`, on Claude Code |
 | `agent-shell-crew-mcp-program` | the bundled `bin/agent-shell-crew-mcp` |
 | `agent-shell-crew-python` | `python3` |
+| `agent-shell-crew-protocol` | `briefs/protocol.md`, sent after every member's brief; `nil` sends none |
+| `agent-shell-crew-handoff-format` | the protocol's one-line hand-off; `nil` accepts any summary |
 | `agent-shell-crew-profiles` | none; see Profiles below |
 | `agent-shell-crew-stall-minutes` | `10` |
 | `agent-shell-crew-auto-recover` | `nil` |
@@ -184,6 +186,23 @@ call fell from 476k to 75k tokens, and cache reads per closed item from
 A nudge carries the item's brief and checkpoint, so a member starts work
 without a `crew_show` call; a brief past `agent-shell-crew-nudge-max-chars`
 is cut, and the nudge says to call `crew_show` for the rest.
+
+Nudges that reach a busy member wait for its turn to end and go as one
+prompt, so a burst of new items costs one turn, not one each. A member due
+a fresh session gets it first, and the nudges with it.
+
+Every closed item records `:BRIEF_VERSION:` and `:MODEL:` beside `:COST:`:
+compare them to see what a brief edit or a cheaper model did.
+
+## Rules the crew holds
+
+- **The protocol is the package's.** `briefs/protocol.md` (hand-off line,
+  checkpoints, reaching other members) follows every brief, so your briefs
+  need not repeat it. `crew_handoff` to another member refuses a summary
+  that is not the protocol's one line of fields and says why.
+- **One open item per ref.** `crew_create` refuses a second open item for a
+  `ref`, naming the first and its owner. Pass `allow_duplicate_ref`, or make
+  it a child of that item (`parent`), when it really is separate work.
 
 Session names change on every fresh start. Address members through crew
 items (`crew_create`, `crew_handoff` to `role@project`), never by session

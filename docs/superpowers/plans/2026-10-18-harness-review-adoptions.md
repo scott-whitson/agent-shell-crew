@@ -1,6 +1,6 @@
 # Adoptions from a review of three agent harnesses
 
-**Status: agreed with Scott 2026-10-18; not built.** The brief-side
+**Status: built 2026-10-18 (§1-§5).** The brief-side
 adoptions are live in the briefs (this repo's and pearl's); this plan is
 the package side. The `:max-awake` cap went into the sleeping-members plan
 (2026-10-13, §2) because it is part of that build.

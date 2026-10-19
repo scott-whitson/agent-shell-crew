@@ -124,7 +124,7 @@ Tools:
 |---|---|
 | `crew_mine`, `crew_list` | Items I own / all items in this project |
 | `crew_show(id)` | One item: brief, properties, log |
-| `crew_create(title, brief, owner, evidence?, ref?, parent?, request_id?)` | New item for any member, or `human` |
+| `crew_create(title, brief, owner, evidence?, ref?, parent?, request_id?, allow_duplicate_ref?)` | New item for any member, or `human` |
 | `crew_claim(id)` | `PENDING → ACTIVE` |
 | `crew_note(id, text)` | Append a log line |
 | `crew_handoff(id, to, summary, brief, request_id?)` | Close mine as `HANDED`; open a new item for `to` |
@@ -139,6 +139,23 @@ same actor returns the first call's item, with no second nudge. On an
 once with the same id: a call that landed but answered late (seen
 2026-10-07) is found, not repeated. Other verbs are not retried.
 `CREW_RPC_TIMEOUT` (seconds, default 30) sets the wait.
+
+**One open item per ref.** `crew_create` with a `ref` that an open item
+(PENDING, ACTIVE or PARKED) already carries is refused, naming that item and
+its owner: a request id catches a retried call, not a second item for the
+same work, and package 29 was claimed twice on 2026-09-28. A child of that
+item (`parent`, a lead splitting it) and `allow_duplicate_ref` are allowed;
+a hand-off closes its source before it opens the new item.
+
+**The hand-off line.** The crew's protocol (`briefs/protocol.md`, sent after
+every member's brief; `agent-shell-crew-protocol`) makes agent-to-agent text
+one line of fields: `ITEM <id> | <STATE> | branch … | sha … | tests … |
+next: …`. `crew_handoff` to another member refuses a summary that is not in
+that shape (`agent-shell-crew-handoff-format`; nil turns it off) and the
+refusal shows the shape, so the agent sends it again in it. A rule the tool
+holds costs no prompt and survives a model that drifts; seven briefs once
+carried their own copies of the protocol, and the copies drifted apart. A
+summary for the human is prose and is never checked.
 
 **Cancelling owned work.** The creator of an item (its `:FROM:`) and the
 human may cancel it, not only its owner, so a lead can withdraw work it
@@ -200,8 +217,15 @@ item before, measured 2026-10-16). A brief longer than
 `agent-shell-crew-nudge-max-chars` (4000) is cut there with "Call crew_show
 with id c-… for the rest." A decision nudge carries the question it answers.
 
-- **Busy session:** `agent-shell-busy-submit-queue`, so it arrives when the
-  current turn ends. Nothing is typed into a running turn.
+- **Busy session:** held by the crew until the turn ends, then everything
+  held goes as ONE prompt ("3 crew messages arrived while you worked: …").
+  Nothing is typed into a running turn. Not agent-shell's busy queue, which
+  makes each nudge a turn of its own: a gate that claims every ready item at
+  once spent the rest of a bundle's nudges on turns that found nothing, each
+  re-reading its context. A member due a fresh session is refreshed first
+  and the held nudges move across, so new work starts in a fresh context.
+  The watch tick delivers nudges an idle member still holds, in case a turn
+  end never reached the buffer.
 - **Idle session with an empty input:** `agent-shell-insert` with `:submit t
   :no-focus t`.
 - **Idle session whose input is not empty** (a human is mid-draft): queue it
@@ -328,6 +352,12 @@ The board's Cost column sums a piece of work's items. With a fresh context
 per item the figure is the item's own; without it, it is the spend between
 two closes.
 
+Beside it go `:BRIEF_VERSION:` (eight hex digits of the sha1 of the brief
+and protocol text the member started with) and `:MODEL:` (the session's
+model id), so a brief edit or a cheaper model can be judged by what the
+items it touched cost and how often they came back, instead of by date.
+Reporting is left to the project's own scripts.
+
 ## Trying a change: the pass rule comes first
 
 A setting, a brief rule or a new behaviour is tried on a crew before it is
@@ -358,6 +388,9 @@ interrupt paused, is stuck. The watcher warns once per episode, in the echo
 area as well as `*Warnings*`. Recovery (opt-in) is the two steps that fixed
 it by hand -- interrupt, then resume the queue -- and only when messages are
 waiting, never at a permission prompt, since an interrupt rejects the prompt.
+Messages the crew holds count as waiting. An interrupted member is also
+told its last action may not have finished, so it checks git status and its
+checkpoint rather than taking a cut-off commit or test run as done.
 It reads two of agent-shell's internal state keys; `make api-check` fails if
 they are renamed.
 
@@ -389,6 +422,8 @@ own status display use the function and hook instead. `PARKED` items appear in
 | `agent-shell-crew-roles` | `lead`, `owner`, `check` with shipped briefs, Claude Code |
 | `agent-shell-crew-mcp-program` | the package's `bin/agent-shell-crew-mcp` |
 | `agent-shell-crew-python` | `"python3"` |
+| `agent-shell-crew-protocol` | the package's `briefs/protocol.md`, sent after every brief |
+| `agent-shell-crew-handoff-format` | the protocol's line of fields; nil turns the check off |
 
 ## Packaging
 

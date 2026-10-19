@@ -310,7 +310,7 @@ REASON is one line saying why.  ALL-ITEMS is as for
 
 ;;;###autoload
 (defun agent-shell-crew-status-segment ()
-  "A dot for every running crew's worst health, or nil when none runs.
+  "Return a dot for every running crew's worst health, or nil if none is running.
 For a status bar: the queue is reread only when its file changes, so
 calling this every few seconds costs a stat per crew.  Hovering names
 the reason; clicking opens the board.  Never signals."
