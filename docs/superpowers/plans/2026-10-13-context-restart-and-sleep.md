@@ -106,6 +106,19 @@ before the restart is on the item.
   a stopped crew is not woken by a nudge. `restart-profile` is stop then
   start-profile and needs no change.
 
+- **A cap on waking (added 2026-10-18).** Key `:max-awake N` on a
+  profile; off unless set. A wake that would make more than N of the
+  root's members run waits in a FIFO list (ROOT MEMBER TEXT...) instead,
+  and the text stays with it. A member going to sleep, or stopping, admits
+  the head of the list. Exempt: the lead, and a member the human wakes
+  with RET; they start at once and count towards N. Why: a gate bundle
+  or a slate across lanes wakes 4-6 sessions at once, about 250 MB each,
+  on top of the gate's 1.6 GB of pytest workers, and a full crew plus a
+  build has already run whistle out of memory and killed emacs.service.
+  A queued wake costs seconds; an OOM costs the whole crew. (From
+  pi-cowboy's concurrency pools, where a revived agent likewise skips the
+  queue.) Pearl sets 4.
+
 **Cost of waking:** a session starts in about 15 seconds when work arrives.
 Today's refresh pays the same start, just earlier.
 
@@ -113,7 +126,8 @@ Today's refresh pays the same start, just earlier.
 turn end; one with open items is refreshed instead; a nudge wakes a sleeper
 and arrives after its brief; start-profile does not start idle fresh
 members; stop clears the list; the watch tick wakes a sleeper that owns a
-PENDING item.
+PENDING item; with `:max-awake 2` and two members awake, a third wake
+waits and starts when one of them sleeps, while the lead starts at once.
 
 ## 3. What the human sees
 
