@@ -336,4 +336,30 @@
         (agent-shell-crew--watch))
       (should-not (crew-list-test--recover-calls)))))
 
+;;; Held nudges
+
+(ert-deftest crew-watch-delivers-nudges-stranded-by-a-missed-turn-end ()
+  (crew-list-test--with root
+    (agent-shell-crew-start root '("owner"))
+    (let ((b (agent-shell-crew--member-buffer "owner@my-app" root))
+          (agent-shell-test--busy nil) (agent-shell-crew--warned nil))
+      (with-current-buffer b (setq agent-shell-crew--ready t agent-shell-crew--pending '("a" "b")))
+      (setq agent-shell-test--calls nil)
+      (cl-letf (((symbol-function 'agent-shell-crew--input-empty-p) (lambda (_b) t))
+                ((symbol-function 'agent-shell-crew--say) #'ignore))
+        (agent-shell-crew--watch))
+      (should (= (length (seq-filter (lambda (c) (eq (car c) 'insert)) agent-shell-test--calls)) 1))
+      (should (null (buffer-local-value 'agent-shell-crew--pending b))))))
+
+(ert-deftest crew-recover-counts-held-nudges-as-messages-waiting ()
+  (crew-list-test--with root
+    (agent-shell-crew-start root '("owner"))
+    (crew-list-test--quiet root "owner@my-app" 30)
+    (with-current-buffer (agent-shell-crew--member-buffer "owner@my-app" root)
+      (setq agent-shell-crew--pending '("Decision: merge")))
+    (let ((agent-shell-test--busy t) (agent-shell-crew-auto-recover t) (agent-shell-crew--warned nil))
+      (cl-letf (((symbol-function 'agent-shell-crew--say) #'ignore))
+        (agent-shell-crew--watch))
+      (should (equal (mapcar #'car (crew-list-test--recover-calls)) '(interrupt))))))
+
 ;;; agent-shell-crew-list-test.el ends here

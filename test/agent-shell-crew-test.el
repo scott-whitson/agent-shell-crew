@@ -74,11 +74,40 @@
     (agent-shell-crew-start root '("owner"))
     (should (= (length (seq-filter (lambda (c) (eq (car c) 'start)) agent-shell-test--calls)) 1))))
 
-(ert-deftest crew-deliver-busy-queues ()
+(ert-deftest crew-deliver-busy-holds-until-the-turn-ends ()
   (with-temp-buffer
     (let ((agent-shell-test--calls nil) (agent-shell-test--busy t))
+      (setq agent-shell-crew--ready t)
       (agent-shell-crew--deliver (current-buffer) "hello")
-      (should (equal (car agent-shell-test--calls) (list 'queue "hello" (current-buffer)))))))
+      (should (null agent-shell-test--calls))
+      (should (equal agent-shell-crew--pending '("hello"))))))
+
+(ert-deftest crew-held-nudges-go-as-one-prompt-when-the-turn-ends ()
+  "A bundle's nudges to the gate were a turn each, most of them finding nothing."
+  (with-temp-buffer
+    (let ((agent-shell-test--calls nil) (agent-shell-test--busy t) (b (current-buffer)))
+      (setq agent-shell-crew--ready t)
+      (dolist (tx '("New crew item a." "New crew item b." "New crew item c."))
+        (agent-shell-crew--deliver b tx))
+      (setq agent-shell-test--busy nil)
+      (cl-letf (((symbol-function 'agent-shell-crew--input-empty-p) (lambda (_b) t)))
+        (agent-shell-crew--turn-ended b))
+      (let ((inserts (seq-filter (lambda (c) (eq (car c) 'insert)) agent-shell-test--calls)))
+        (should (= (length inserts) 1))
+        (should (string-match-p "\\`3 crew messages" (nth 1 (car inserts))))
+        (should (string-match-p "item a.*item b.*item c" (replace-regexp-in-string "\n" " " (nth 1 (car inserts))))))
+      (should (null agent-shell-crew--pending)))))
+
+(ert-deftest crew-one-held-nudge-goes-as-it-is ()
+  (should (equal (agent-shell-crew--combine '("only")) "only")))
+
+(ert-deftest crew-held-nudges-still-busy-at-turn-end-stay-held ()
+  (with-temp-buffer
+    (let ((agent-shell-test--calls nil) (agent-shell-test--busy t) (b (current-buffer)))
+      (setq agent-shell-crew--ready t agent-shell-crew--pending '("a" "b"))
+      (agent-shell-crew--turn-ended b)
+      (should (null agent-shell-test--calls))
+      (should (equal (length agent-shell-crew--pending) 1)))))
 
 (ert-deftest crew-deliver-idle-empty-submits ()
   (with-temp-buffer
@@ -95,11 +124,12 @@
         (agent-shell-crew--deliver buffer "hello"))
       (should (null agent-shell-test--calls))
       (should (equal agent-shell-crew--pending '("hello")))
-      ;; Once the human submits and the turn runs, it is queued, not typed.
+      ;; Once the human submits and the turn runs, it is still held, for
+      ;; the turn's end, never typed into the input.
       (setq agent-shell-test--busy t)
       (agent-shell-crew--flush buffer)
-      (should (equal (car agent-shell-test--calls) (list 'queue "hello" buffer)))
-      (should (null agent-shell-crew--pending)))))
+      (should (null agent-shell-test--calls))
+      (should (equal agent-shell-crew--pending '("hello"))))))
 
 (ert-deftest crew-input-empty-without-process-is-not-empty ()
   (with-temp-buffer
@@ -246,9 +276,11 @@
         (agent-shell-test--emit owner 'init-finished))
       (let ((texts (mapcar (lambda (c) (nth 1 c))
                            (reverse (seq-filter (lambda (c) (eq (car c) 'insert)) agent-shell-test--calls)))))
-        (should (= (length texts) 3))
+        (should (= (length texts) 2))
         (should (string-match-p "You are owner@my-app" (nth 0 texts)))
-        (should (equal (cdr texts) '("first nudge" "second nudge")))))))
+        ;; Both, in order, as one prompt.
+        (should (string-match-p "\\`2 crew messages.*first nudge.*second nudge"
+                                (replace-regexp-in-string "\n" " " (nth 1 texts))))))))
 
 (ert-deftest crew-intro-lists-items-created-during-bootstrap ()
   "Finding 4: the intro's owned list is taken when the session is ready."
@@ -611,6 +643,19 @@
         (should-not (agent-shell-crew--maybe-refresh old))
         (should (buffer-live-p old))))))
 
+(ert-deftest crew-a-due-refresh-carries-held-nudges-into-the-new-session ()
+  "New work then starts in a fresh context, not at the end of the old one."
+  (crew-fresh-test--with root
+    (let ((old (agent-shell-crew--start-member root "owner" :socket "/s" :fresh t)))
+      (with-current-buffer old (setq agent-shell-crew--ready t agent-shell-crew--pending '("item b")))
+      (agent-shell-crew--fresh-due "owner@my-app" root)
+      (agent-shell-crew--turn-ended old)
+      (should-not (buffer-live-p old))
+      (should (equal (buffer-local-value 'agent-shell-crew--pending
+                                         (agent-shell-crew--member-buffer "owner@my-app" root))
+                     '("item b")))
+      (should-not (seq-find (lambda (c) (eq (car c) 'insert)) agent-shell-test--calls)))))
+
 (ert-deftest crew-a-member-without-fresh-is-never-restarted ()
   (crew-fresh-test--with root
     (let ((old (agent-shell-crew--start-member root "owner" :socket "/s")))
@@ -657,23 +702,22 @@
     (agent-shell-crew--deliver b "stop" t)
     (should (equal (car agent-shell-test--calls) (list 'steer "stop" b)))))
 
-(ert-deftest crew-ordinary-text-still-queues-behind-the-turn ()
+(ert-deftest crew-ordinary-text-still-waits-for-the-turn ()
   (crew-steer-test--with b
     (agent-shell-crew--deliver b "new item")
-    (should (eq (car (car agent-shell-test--calls)) 'queue))))
+    (should (null agent-shell-test--calls))
+    (should (equal agent-shell-crew--pending '("new item")))))
 
-(ert-deftest crew-urgent-falls-back-to-queueing-when-it-cannot-steer ()
+(ert-deftest crew-urgent-falls-back-to-holding-when-it-cannot-steer ()
   (crew-steer-test--with b
     (let ((agent-shell-test--steering nil))
-      (agent-shell-crew--deliver b "stop" t)
-      (should (eq (car (car agent-shell-test--calls)) 'queue)))
-    (setq agent-shell-test--calls nil)
+      (agent-shell-crew--deliver b "stop" t))
     (setq agent-shell-test--status 'blocked)
     (agent-shell-crew--deliver b "stop" t)
-    (should (eq (car (car agent-shell-test--calls)) 'queue))
-    (setq agent-shell-test--calls nil agent-shell-test--status nil agent-shell-test--steer-fails t)
+    (setq agent-shell-test--status nil agent-shell-test--steer-fails t)
     (agent-shell-crew--deliver b "stop" t)
-    (should (eq (car (car agent-shell-test--calls)) 'queue))))
+    (should-not (seq-find (lambda (c) (eq (car c) 'steer)) agent-shell-test--calls))
+    (should (equal agent-shell-crew--pending '("stop" "stop" "stop")))))
 
 (ert-deftest crew-closing-an-item-records-what-the-session-spent-since-last-time ()
   (crew-fresh-test--with root

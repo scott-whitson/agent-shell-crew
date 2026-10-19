@@ -276,20 +276,44 @@ messages where stopping is the point."
       (setq agent-shell-crew--pending (append agent-shell-crew--pending (list text))))))
 
 (defun agent-shell-crew--send (buffer text)
-  "Send TEXT to the ready session in BUFFER without disturbing it."
+  "Send TEXT to the ready session in BUFFER without disturbing it.
+A busy session holds TEXT until its turn ends, when everything it holds
+goes as one prompt (see `agent-shell-crew--flush').  agent-shell's own
+busy queue would make each nudge a turn of its own: a gate that claims
+every ready item at once spent the rest of a bundle's nudges on turns
+that found nothing, each re-reading its whole context."
   (with-current-buffer buffer
-    (cond ((shell-maker-busy) (agent-shell-busy-submit-queue text))
-          ((agent-shell-crew--input-empty-p buffer)
-           (agent-shell-insert :text text :submit t :no-focus t :shell-buffer buffer))
-          (t (setq agent-shell-crew--pending (append agent-shell-crew--pending (list text)))))))
+    (if (and (not (shell-maker-busy)) (agent-shell-crew--input-empty-p buffer))
+        (agent-shell-insert :text text :submit t :no-focus t :shell-buffer buffer)
+      (setq agent-shell-crew--pending (append agent-shell-crew--pending (list text))))))
+
+(defun agent-shell-crew--combine (texts)
+  "Return TEXTS, a list of nudges, as one prompt."
+  (if (cdr texts)
+      (format "%d crew messages arrived while you worked:\n\n%s"
+              (length texts) (mapconcat #'identity texts "\n\n---\n\n"))
+    (car texts)))
 
 (defun agent-shell-crew--flush (buffer)
-  "Deliver the nudges BUFFER was holding."
+  "Deliver the nudges BUFFER was holding, as one prompt."
   (when (buffer-live-p buffer)
     (let ((texts (buffer-local-value 'agent-shell-crew--pending buffer)))
       (when texts
         (with-current-buffer buffer (setq agent-shell-crew--pending nil))
-        (dolist (text texts) (agent-shell-crew--deliver buffer text))))))
+        (agent-shell-crew--deliver buffer (agent-shell-crew--combine texts))))))
+
+(defun agent-shell-crew--turn-ended (buffer)
+  "BUFFER's turn has ended: refresh it if due, else deliver what it holds.
+A refresh carries the held nudges into the new session, so new work
+starts in a fresh context rather than at the end of the old one."
+  (unless (agent-shell-crew--maybe-refresh buffer)
+    (agent-shell-crew--flush buffer)))
+
+(defun agent-shell-crew--held (buffer)
+  "How many messages BUFFER's member has waiting: the crew's and agent-shell's."
+  (with-current-buffer buffer
+    (+ (length agent-shell-crew--pending)
+       (length (map-elt (bound-and-true-p agent-shell--state) :pending-prompts)))))
 
 ;;; Stuck members
 
@@ -355,7 +379,7 @@ Never signals."
         (let* ((state (bound-and-true-p agent-shell--state))
                (last (map-elt state :last-activity-time))
                (quiet (and last (/ (float-time (time-subtract nil last)) 60.0)))
-               (held (length (map-elt state :pending-prompts)))
+               (held (agent-shell-crew--held buffer))
                (waiting (if (> held 0)
                             (format " (%d message%s waiting)" held (if (= held 1) "" "s"))
                           "")))
@@ -365,10 +389,12 @@ Never signals."
            ((and (shell-maker-busy) quiet (>= quiet agent-shell-crew-stall-minutes))
             (format "busy with no activity for %d min%s; interrupt it with C-c C-c"
                     (round quiet) waiting))
-           ((and (not (shell-maker-busy)) (> held 0) quiet (>= quiet 1))
+           ((and (not (shell-maker-busy)) (> (length (map-elt state :pending-prompts)) 0)
+                 quiet (>= quiet 1))
             (format "idle with %d queued message%s that are not being sent; \
 M-x agent-shell-prompt-queue-resume in its buffer"
-                    held (if (= held 1) "" "s"))))))
+                    (length (map-elt state :pending-prompts))
+                    (if (= (length (map-elt state :pending-prompts)) 1) "" "s"))))))
     (error nil)))
 
 (defvar agent-shell-crew--watch-timer nil
@@ -391,7 +417,8 @@ needs messages waiting and why it is off by default."
 (defun agent-shell-crew--recover (buffer)
   "Unstick the member session in BUFFER; return what was done, or nil."
   (with-current-buffer buffer
-    (let ((held (length (map-elt agent-shell--state :pending-prompts)))
+    (let ((held (agent-shell-crew--held buffer))
+          (queued (length (map-elt agent-shell--state :pending-prompts)))
           (nudged (alist-get buffer agent-shell-crew--limit-nudged)))
       (cond
        ;; Cut off by a usage limit: no queue to resume, so say so. At most
@@ -411,19 +438,33 @@ needs messages waiting and why it is off by default."
        ((shell-maker-busy)
         (agent-shell-interrupt t)
         "interrupted it; its queue resumes on the next check")
-       (t
+       ((> queued 0)
         (agent-shell-prompt-queue-resume)
-        (format "resumed its queue (%d message%s)" held (if (= held 1) "" "s")))))))
+        (format "resumed its queue (%d message%s)" queued (if (= queued 1) "" "s")))
+       (t
+        (agent-shell-crew--flush buffer)
+        (format "delivered %d held message%s" held (if (= held 1) "" "s")))))))
 
 (defun agent-shell-crew--say (text)
   "Tell the human TEXT where they will see it: a warning and the echo area."
   (display-warning 'agent-shell-crew text :warning)
   (message "%s" text))
 
+(defun agent-shell-crew--deliver-stranded (buffer)
+  "Deliver what BUFFER holds if it is ready, idle and its input is empty.
+The backstop for a turn end that never reached the buffer."
+  (when (and (buffer-local-value 'agent-shell-crew--pending buffer)
+             (buffer-local-value 'agent-shell-crew--ready buffer)
+             (not (with-current-buffer buffer (shell-maker-busy)))
+             (agent-shell-crew--input-empty-p buffer))
+    (agent-shell-crew--flush buffer)))
+
 (defun agent-shell-crew--watch ()
-  "Warn once about each member that has become stuck, recovering it if allowed."
+  "Warn once about each member that has become stuck, recovering it if allowed.
+First delivers nudges held by an idle member whose turn end was missed."
   (dolist (buffer (buffer-list))
     (when (buffer-local-value 'agent-shell-crew--member buffer)
+      (condition-case nil (agent-shell-crew--deliver-stranded buffer) (error nil))
       (let ((why (agent-shell-crew--member-stuck buffer))
             (name (buffer-local-value 'agent-shell-crew--member buffer)))
         (cond
@@ -486,14 +527,11 @@ nudges that arrived meanwhile.  BRIEF overrides ROLE's brief."
                    (when role
                      (agent-shell-crew--send buffer (agent-shell-crew--intro role member root brief)))
                    (agent-shell-crew--flush buffer))))
-    (dolist (event '(input-submitted turn-complete))
-      (agent-shell-subscribe-to
-       :shell-buffer buffer :event event
-       :on-event (lambda (_event) (agent-shell-crew--flush buffer))))
     (agent-shell-subscribe-to
      :shell-buffer buffer :event 'turn-complete
-     ;; Not inside the event: the refresh kills this buffer.
-     :on-event (lambda (_event) (run-at-time 0 nil #'agent-shell-crew--maybe-refresh buffer)))
+     ;; Not inside the event: the refresh kills this buffer, and the
+     ;; session may still read busy until the event has run.
+     :on-event (lambda (_event) (run-at-time 0 nil #'agent-shell-crew--turn-ended buffer)))
     (dolist (event '(input-submitted turn-complete permission-request permission-response))
       (agent-shell-subscribe-to
        :shell-buffer buffer :event event
@@ -664,7 +702,7 @@ them; an item still ACTIVE loses the session that was doing it."
   (let (reasons)
     (dolist (buffer (agent-shell-crew--member-buffers root))
       (let ((name (buffer-local-value 'agent-shell-crew--member buffer))
-            (held (length (map-elt (buffer-local-value 'agent-shell--state buffer) :pending-prompts))))
+            (held (agent-shell-crew--held buffer)))
         (with-current-buffer buffer
           (cond ((eq (condition-case nil (agent-shell-status :shell-buffer buffer) (error nil)) 'blocked)
                  (push (format "%s is at a permission prompt" name) reasons))
