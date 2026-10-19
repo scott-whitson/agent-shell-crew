@@ -43,7 +43,9 @@ TOOLS = [
           {"title": S, "brief": S, "owner": S, "evidence": S, "ref": S, "status": STATUS,
            "branch": BRANCH, "parent": {"type": "string", "description": "Optional id of the "
            "item this work belongs to; cancelling that item cancels this one too."},
-           "request_id": REQUEST, "urgent": {"type": "boolean", "description": "Steer the "
+           "request_id": REQUEST, "allow_duplicate_ref": {"type": "boolean", "description":
+           "Create it even though an open item already carries this ref."},
+           "urgent": {"type": "boolean", "description": "Steer the "
            "nudge into the owner's running turn instead of queueing it. Only for work that "
            "must change what they are doing now: a declined steer interrupts their turn."}},
           ["title", "brief", "owner"]),

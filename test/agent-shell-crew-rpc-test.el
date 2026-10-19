@@ -288,4 +288,57 @@
                               (agent-shell-crew--nudge-text root id))))))
 
 (provide 'agent-shell-crew-rpc-test)
+;;; One open item per ref
+
+(ert-deftest crew-rpc-create-refuses-a-second-open-item-for-a-ref ()
+  "Package 29 was claimed twice on 2026-09-28."
+  (crew-rpc-test--with root
+    (let* ((first (alist-get 'id (alist-get 'result (crew-rpc-test--call "human" root "create"
+                                                                       '((title . "29") (owner . "owner@my-app") (ref . "29"))))))
+           (again (crew-rpc-test--call "human" root "create"
+                                       '((title . "29 again") (owner . "check@my-app") (ref . "29")))))
+      (should (eq (alist-get 'ok again) :false))
+      (should (string-match-p (regexp-quote first) (alist-get 'error again)))
+      (should (string-match-p "owner@my-app" (alist-get 'error again)))
+      (should (= (length (agent-shell-crew-queue-list root)) 1)))))
+
+(ert-deftest crew-rpc-create-ref-allowed-by-override-parent-or-closed-item ()
+  (crew-rpc-test--with root
+    (progn
+      (crew-rpc-test--call "human" root "create" '((title . "29") (owner . "owner@my-app") (ref . "29")))
+      (should (eq (alist-get 'ok (crew-rpc-test--call "human" root "create"
+                                                     '((title . "x") (owner . "owner@my-app") (ref . "29")
+                                                       (allow_duplicate_ref . t))))
+                  t))
+      (should (eq (alist-get 'ok (crew-rpc-test--call "human" root "create"
+                                                     '((title . "y") (owner . "owner@my-app") (ref . "30"))))
+                  t)))
+    ;; A closed item does not count.
+    (let ((done (alist-get 'id (alist-get 'result (crew-rpc-test--call "human" root "create"
+                                                                     '((title . "31") (owner . "owner@my-app") (ref . "31")))))))
+      (agent-shell-crew-queue-done root "human" done "dropped" t)
+      (should (eq (alist-get 'ok (crew-rpc-test--call "human" root "create"
+                                                     '((title . "31") (owner . "owner@my-app") (ref . "31"))))
+                  t)))))
+
+(ert-deftest crew-rpc-child-of-the-ref-holder-is-allowed ()
+  (crew-rpc-test--with root
+    (let ((first (alist-get 'id (alist-get 'result (crew-rpc-test--call "human" root "create"
+                                                                      '((title . "29") (owner . "owner@my-app") (ref . "29")))))))
+      (should (eq (alist-get 'ok (crew-rpc-test--call "human" root "create"
+                                                     `((title . "part") (owner . "check@my-app") (ref . "29")
+                                                       (parent . ,first))))
+                  t)))))
+
+(ert-deftest crew-rpc-handoff-still-inherits-its-ref ()
+  (crew-rpc-test--with root
+    (let ((id (alist-get 'id (alist-get 'result (crew-rpc-test--call "human" root "create"
+                                                                   '((title . "29") (owner . "owner@my-app") (ref . "29")))))))
+      (agent-shell-crew-queue-claim root "owner@my-app" id)
+      (let ((reply (crew-rpc-test--call "owner@my-app" root "handoff"
+                                        `((id . ,id) (to . "check@my-app") (summary . "ITEM x | HANDED")))))
+        (should (eq (alist-get 'ok reply) t))
+        (should (equal (plist-get (agent-shell-crew-queue-get root (alist-get 'id (alist-get 'result reply))) :ref)
+                       "29"))))))
+
 ;;; agent-shell-crew-rpc-test.el ends here

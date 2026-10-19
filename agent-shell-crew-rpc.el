@@ -134,6 +134,23 @@ Every item ever, with its log, ran to megabytes and broke the reply
         (agent-shell-crew--fail "%s is not a member of this crew (members: %s)"
                                 name (string-join members ", "))))))
 
+(defun agent-shell-crew--rpc-check-ref (root ref parent allow)
+  "Fail when an open item in ROOT already carries REF.
+Not when REF is blank, ALLOW is non-nil, or that item is PARENT: a lead
+splitting its own item.  A retried call is caught by its request id; this
+catches a second item for the same work, as package 29 was claimed twice
+on 2026-09-28."
+  (unless (or allow (agent-shell-crew--blank-p ref))
+    (when-let* ((open (seq-find (lambda (item)
+                                  (and (equal (plist-get item :ref) ref)
+                                       (member (plist-get item :state) agent-shell-crew--open-states)
+                                       (not (equal (plist-get item :id) parent))))
+                                (agent-shell-crew-queue-list root))))
+      (agent-shell-crew--fail
+       "Item %s (%s, owned by %s) already carries ref %s; no second item was made. \
+Hand off or add to that one, or pass allow_duplicate_ref if this really is separate work"
+       (plist-get open :id) (plist-get open :state) (plist-get open :owner) ref))))
+
 (defun agent-shell-crew--rpc-notify (member root text &optional urgent)
   "Tell MEMBER of ROOT's crew TEXT, unless MEMBER is the human.
 URGENT non-nil asks for the text to be steered into a running turn."
@@ -157,6 +174,8 @@ URGENT non-nil asks for the text to be steered into a running turn."
          (if-let* ((old (agent-shell-crew-queue-find-request root actor request)))
              `((id . ,old) (duplicate . t))
            (agent-shell-crew--rpc-check-member root owner)
+           (agent-shell-crew--rpc-check-ref root (funcall arg 'ref) (funcall arg 'parent)
+                                            (eq (funcall arg 'allow_duplicate_ref) t))
            (let ((id (agent-shell-crew-queue-create root actor :title title :owner owner
                                                     :brief (funcall arg 'brief)
                                                     :evidence (funcall arg 'evidence)
