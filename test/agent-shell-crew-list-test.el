@@ -208,6 +208,41 @@
         (agent-shell-crew--cached-items root)
         (should (= reads 1))))))
 
+;;; Runs a member waits on
+
+(ert-deftest crew-health-a-live-run-is-working-not-stalled ()
+  "A gate that starts a run and waits idle for it is working, not stuck."
+  (crew-list-test--with root
+    (agent-shell-crew-start root '("owner"))
+    (let ((id (agent-shell-crew-queue-create root "human" :title "Bundle it" :owner "owner@my-app")))
+      (agent-shell-crew-queue-claim root "owner@my-app" id)
+      (agent-shell-crew-queue-checkpoint root "owner@my-app" id "gate running | next: read the GATE line"))
+    (let ((agent-shell-crew-runs-function (lambda (_) '(("owner@my-app" . "run in progress, 4 min")))))
+      (should (equal (agent-shell-crew-health root)
+                     '(working . "owner@my-app run in progress, 4 min"))))))
+
+(ert-deftest crew-health-a-claimed-run-that-died-is-stalled-and-named ()
+  "The checkpoint says a run is in progress and none is alive: red, and why."
+  (crew-list-test--with root
+    (agent-shell-crew-start root '("owner"))
+    (let ((id (agent-shell-crew-queue-create root "human" :title "Bundle it" :owner "owner@my-app")))
+      (agent-shell-crew-queue-claim root "owner@my-app" id)
+      (agent-shell-crew-queue-checkpoint root "owner@my-app" id "gate running | next: read the GATE line"))
+    (let ((agent-shell-crew-runs-function (lambda (_) nil)))
+      (should (equal (agent-shell-crew-health root)
+                     '(stalled . "Bundle it: owner@my-app says a run is in progress, but none is alive"))))))
+
+(ert-deftest crew-health-a-busy-owner-with-an-old-claim-is-still-working ()
+  "A checkpoint left over while the owner works on is not a dead run."
+  (crew-list-test--with root
+    (agent-shell-crew-start root '("owner"))
+    (crew-list-test--status root "owner@my-app" 'busy)
+    (let ((id (agent-shell-crew-queue-create root "human" :title "Bundle it" :owner "owner@my-app")))
+      (agent-shell-crew-queue-claim root "owner@my-app" id)
+      (agent-shell-crew-queue-checkpoint root "owner@my-app" id "gate running"))
+    (let ((agent-shell-crew-runs-function (lambda (_) nil)))
+      (should (eq (car (agent-shell-crew-health root)) 'working)))))
+
 ;;; Stages waiting on the human
 
 (ert-deftest crew-health-idle-with-merged-work-at-your-stage-is-attention ()

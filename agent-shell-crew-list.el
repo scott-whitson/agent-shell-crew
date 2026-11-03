@@ -216,6 +216,54 @@ Returns the list buffer."
 (defconst agent-shell-crew--health-rank '(stalled attention working idle)
   "Health states, worst first.")
 
+(defcustom agent-shell-crew-run-regexp "scripts/check\\.sh"
+  "Regexp matching the command line of a long run a member waits on.
+A member that starts a gate run and goes idle until it finishes is not
+stuck: while a process matching this regexp runs in the member's working
+directory, the member counts as working."
+  :type 'regexp
+  :group 'agent-shell-crew)
+
+(defcustom agent-shell-crew-run-claim-regexp "\\bgate running\\b"
+  "Regexp an item's checkpoint matches when its owner waits on a run.
+When the owner is idle, no run is alive in its directory, and the
+checkpoint still matches, the run died without a result: the crew is
+stalled, and the health says which item."
+  :type 'regexp
+  :group 'agent-shell-crew)
+
+(defvar agent-shell-crew-runs-function #'agent-shell-crew--live-runs
+  "Function of ROOT returning live runs as an alist (MEMBER . DESCRIPTION).")
+
+(defun agent-shell-crew--process-cwd (pid)
+  "The working directory of process PID, or nil where it cannot be read."
+  (ignore-errors (file-name-as-directory (file-truename (format "/proc/%d/cwd" pid)))))
+
+(defun agent-shell-crew--live-runs (root)
+  "Live runs in ROOT's members' directories, as (MEMBER . DESCRIPTION).
+A run is a process whose command line matches `agent-shell-crew-run-regexp'
+and whose working directory is the member's own, or below it."
+  (let ((dirs (delq nil (mapcar (lambda (buffer)
+                                  (let ((dir (buffer-local-value 'default-directory buffer)))
+                                    (and dir (cons (buffer-local-value 'agent-shell-crew--member buffer)
+                                                   (file-name-as-directory (file-truename dir))))))
+                                (agent-shell-crew--member-buffers root))))
+        runs)
+    (when dirs
+      (dolist (pid (list-system-processes))
+        (let* ((attrs (process-attributes pid))
+               (args (alist-get 'args attrs)))
+          (when (and args (string-match-p agent-shell-crew-run-regexp args))
+            (let* ((cwd (agent-shell-crew--process-cwd pid))
+                   (owner (and cwd (seq-find (lambda (d) (string-prefix-p (cdr d) cwd)) dirs))))
+              (when (and owner (not (assoc (car owner) runs)))
+                (let ((etime (alist-get 'etime attrs)))
+                  (push (cons (car owner)
+                              (format "run in progress, %d min"
+                                      (if etime (/ (truncate (float-time etime)) 60) 0)))
+                        runs))))))))
+    runs))
+
 (defvar agent-shell-crew-waiting-function nil
   "Function of ROOT returning the (REF . STAGE) pairs waiting on the human.
 Set by `agent-shell-crew-board' when it loads; nil means no stages.")
@@ -224,12 +272,15 @@ Set by `agent-shell-crew-board' when it loads; nil means no stages.")
   "Return the health of ROOT's crew as (STATE . REASON).
 STATE is, worst first:
   `stalled'   a member is stuck (see `agent-shell-crew--member-stuck'),
-              an open item's owner is not running, or there is open
-              work and no member is working;
+              an open item's owner is not running, an item's checkpoint
+              says a run is in progress and none is alive, or there is
+              open work, no member is working and no run is alive;
   `attention' something waits on the human: a parked item, an item the
               human owns, a member blocked on a prompt, or -- when no
               member is working -- merged work at a stage the human owns;
-  `working'   at least one member is working and nothing above holds;
+  `working'   at least one member is working, or a member's run (see
+              `agent-shell-crew-run-regexp') is alive, and nothing above
+              holds;
   `idle'      members are running and nothing is open.
 REASON is one line saying why.  ALL-ITEMS is as for
 `agent-shell-crew-list--rows'."
@@ -257,6 +308,16 @@ REASON is one line saying why.  ALL-ITEMS is as for
                             open))
          (crew-work (seq-remove (lambda (r) (equal (plist-get r :member) "human")) open))
          (title (lambda (r) (plist-get (plist-get r :item) :title)))
+         (runs (ignore-errors (funcall agent-shell-crew-runs-function root)))
+         (running (seq-remove (lambda (run) (member (car run) working)) runs))
+         (dead-run (seq-find (lambda (r)
+                               (let ((owner (plist-get r :member))
+                                     (checkpoint (plist-get (plist-get r :item) :checkpoint)))
+                                 (and checkpoint
+                                      (string-match-p agent-shell-crew-run-claim-regexp checkpoint)
+                                      (not (member owner working))
+                                      (not (assoc owner runs)))))
+                             crew-work))
          (at-stage (and agent-shell-crew-waiting-function
                         (ignore-errors (funcall agent-shell-crew-waiting-function root)))))
     (cond
@@ -268,7 +329,10 @@ REASON is one line saying why.  ALL-ITEMS is as for
      (orphaned
       (cons 'stalled (format "%s is owned by %s, which is not running"
                              (funcall title (car orphaned)) (plist-get (car orphaned) :member))))
-     ((and crew-work (not working) (not blocked) (not yours))
+     (dead-run
+      (cons 'stalled (format "%s: %s says a run is in progress, but none is alive"
+                             (funcall title dead-run) (plist-get dead-run :member))))
+     ((and crew-work (not working) (not running) (not blocked) (not yours))
       (cons 'stalled (format "%d open item%s and no member is working"
                              (length crew-work) (if (cdr crew-work) "s" ""))))
      ((or yours blocked)
@@ -277,13 +341,17 @@ REASON is one line saying why.  ALL-ITEMS is as for
              (delq nil (list (and yours (format "%d waiting on you" (length yours)))
                              (and blocked (format "%s blocked" (string-join blocked ", ")))))
              "; ")))
-     ((and at-stage (not working))
+     ((and at-stage (not working) (not running))
       (cons 'attention
             (format "%d waiting on you at a stage: %s"
                     (length at-stage)
                     (mapconcat (lambda (w) (format "%s %s" (car w) (cdr w))) at-stage ", "))))
-     (working
-      (cons 'working (format "%s working" (string-join working ", "))))
+     ((or working running)
+      (cons 'working
+            (string-join
+             (append (and working (list (format "%s working" (string-join working ", "))))
+                     (mapcar (lambda (run) (format "%s %s" (car run) (cdr run))) running))
+             "; ")))
      (t (cons 'idle "running, nothing open")))))
 
 (defvar agent-shell-crew--health-cache nil
