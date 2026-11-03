@@ -15,6 +15,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import uuid
 
 VERSION = "0.1.0"
@@ -150,7 +151,16 @@ def handle(message):
                 "result": tool_result(json.dumps(result, indent=2, ensure_ascii=False), False)}
     return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": "Method not found: %s" % method}}
 
+def say_hello():
+    """Tell Emacs this member's crew tools are up, once they are listed.
+
+    The member may not call a crew tool for a while; without this its
+    tools look as dead as tools that never loaded. Errors are ignored:
+    an Emacs from before the `hello' verb answers "Unknown verb"."""
+    call_emacs("hello", {})
+
 def main():
+    hello = None
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -164,6 +174,13 @@ def main():
         if response is not None:
             sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
             sys.stdout.flush()
+            # After the reply, and off this thread, so listing never waits on Emacs.
+            if hello is None and response.get("result", {}).get("tools") is not None:
+                hello = threading.Thread(target=say_hello, daemon=True)
+                hello.start()
+    # A session that lists its tools and leaves at once still says hello.
+    if hello is not None:
+        hello.join(5)
 
 if __name__ == "__main__":
     main()

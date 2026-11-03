@@ -416,6 +416,16 @@ compared per brief version and model."
     (unless (agent-shell-crew--blank-p model)
       (org-entry-put nil "MODEL" (agent-shell-crew--clean-line model)))))
 
+(defun agent-shell-crew-queue-record-permission (root id member tool outcome)
+  "Log on item ID in ROOT's queue that MEMBER was asked about TOOL: OUTCOME.
+OUTCOME is the option picked, such as \"allow\", or \"cancelled\".
+Written by the crew itself, like `agent-shell-crew-queue-record-usage',
+so each item keeps an audit of what its owner was allowed to do."
+  (agent-shell-crew--mutate root id 'permission
+    (agent-shell-crew--log "permission for %s: %s -> %s" member
+                           (agent-shell-crew--clean-line (or tool "a tool call"))
+                           (agent-shell-crew--clean-line (or outcome "unknown")))))
+
 (defun agent-shell-crew-queue-park (root actor id question &optional evidence status)
   "ACTOR parks item ID in ROOT's queue on the human with QUESTION.
 EVIDENCE, when non-blank, replaces the item's evidence.  STATUS is as for

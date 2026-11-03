@@ -36,11 +36,12 @@
 (cl-defun agent-shell-subscribe-to (&key shell-buffer event on-event)
   "Stub: record the subscription."
   (push (list shell-buffer event on-event) agent-shell-test--subscriptions))
-(defun agent-shell-test--emit (buffer event)
-  "Fire EVENT's subscribers for BUFFER."
+(defun agent-shell-test--emit (buffer event &optional data)
+  "Fire EVENT's subscribers for BUFFER, with DATA when given."
   (dolist (s agent-shell-test--subscriptions)
     (when (and (eq (nth 0 s) buffer) (eq (nth 1 s) event))
-      (funcall (nth 2 s) (list (cons :event event))))))
+      (funcall (nth 2 s) (append (list (cons :event event))
+                                 (and data (list (cons :data data))))))))
 (defun agent-shell-buffers () "Stub." nil)
 (defvar-local agent-shell-test--status nil "What `agent-shell-status' reports for this buffer.")
 (cl-defun agent-shell-status (&key shell-buffer)

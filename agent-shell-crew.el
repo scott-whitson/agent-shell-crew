@@ -132,6 +132,39 @@ for a session crew did not start.")
   "Non-nil once this member has closed an item and is due a fresh context.")
 (put 'agent-shell-crew--refresh 'permanent-local t)
 
+(defvar-local agent-shell-crew--heard t
+  "Nil until this session's crew MCP program has been heard from.
+Set nil when crew adopts a session, so a session from before this
+variable existed counts as heard.  A member whose tools never load looks
+just like one with nothing to do; see `agent-shell-crew--member-stuck'.")
+(put 'agent-shell-crew--heard 'permanent-local t)
+
+(defvar-local agent-shell-crew--turns 0
+  "How many turns this session has finished since crew adopted it.")
+(put 'agent-shell-crew--turns 'permanent-local t)
+
+(defvar-local agent-shell-crew--expected nil
+  "Alist of (ID . TURNS): items this member was told about and has not named since.
+TURNS is how many turns have ended since the nudge was submitted, nil
+until it is: a nudge held behind a busy turn has not been seen yet.")
+(put 'agent-shell-crew--expected 'permanent-local t)
+
+(defcustom agent-shell-crew-ack-turns 2
+  "Turns a member may end without touching an item it was told about.
+Past that, while it is idle and has no other item ACTIVE, it counts as
+stuck.  Delivering a nudge does not prove the member acted on it; a
+crew_* call naming the item does.  Nil never checks."
+  :type '(choice (const :tag "Never" nil) natnum)
+  :group 'agent-shell-crew)
+
+(defcustom agent-shell-crew-log-permissions t
+  "When non-nil, each permission a member answers is logged on its item.
+The line names the tool and the option picked, so an item's log shows
+what its owner was allowed to do.  The member's ACTIVE item most recently
+touched gets it; a member with none logs nothing."
+  :type 'boolean
+  :group 'agent-shell-crew)
+
 (defvar agent-shell-crew-session-changed-hook nil
   "Hook run when a crew session's status may have changed.
 Each function is called with the member's project root.  Runs when a
@@ -321,8 +354,92 @@ that found nothing, each re-reading its whole context."
   "Refresh BUFFER if due now its turn has ended, else deliver its held nudges.
 A refresh carries the held nudges into the new session, so new work
 starts in a fresh context rather than at the end of the old one."
+  (when (buffer-live-p buffer)
+    (agent-shell-crew--count-turn buffer))
   (unless (agent-shell-crew--maybe-refresh buffer)
     (agent-shell-crew--flush buffer)))
+
+;;; Heard from, and acted on
+
+(defun agent-shell-crew--count-turn (buffer)
+  "Count a finished turn in BUFFER, and against each item it was told about."
+  (with-current-buffer buffer
+    (setq agent-shell-crew--turns (1+ agent-shell-crew--turns))
+    (dolist (entry agent-shell-crew--expected)
+      (when (cdr entry) (setcdr entry (1+ (cdr entry)))))))
+
+(defun agent-shell-crew--input-submitted (buffer)
+  "Start counting turns for each item BUFFER was told about but had not seen."
+  (with-current-buffer buffer
+    (dolist (entry agent-shell-crew--expected)
+      (unless (cdr entry) (setcdr entry 0)))))
+
+(defun agent-shell-crew--expect (member root id)
+  "Expect MEMBER of ROOT's crew to act on item ID it is about to be told about."
+  (when-let* ((buffer (agent-shell-crew--member-buffer member root)))
+    (with-current-buffer buffer
+      (setq agent-shell-crew--expected
+            (cons (cons id nil) (assoc-delete-all id agent-shell-crew--expected))))))
+
+(defun agent-shell-crew--heard (actor root id)
+  "Note a request from ACTOR of ROOT's crew, naming item ID or nil.
+Any request shows ACTOR's crew tools work; one naming an item it was
+told about shows it acted on it."
+  (when-let* ((buffer (agent-shell-crew--member-buffer actor root)))
+    (let ((first (not (buffer-local-value 'agent-shell-crew--heard buffer))))
+      (with-current-buffer buffer
+        (setq agent-shell-crew--heard t)
+        (when id
+          (setq agent-shell-crew--expected (assoc-delete-all id agent-shell-crew--expected))))
+      (when first
+        (run-hook-with-args 'agent-shell-crew-session-changed-hook
+                            (buffer-local-value 'agent-shell-crew--root buffer))))))
+
+(defun agent-shell-crew--unacted (buffer)
+  "The (ID . TURNS) BUFFER's member was told about and has left alone, or nil.
+Only past `agent-shell-crew-ack-turns', and only while the member has no
+other item ACTIVE: one working an item through several turns may leave
+the next untouched.  Forgets items that closed or changed owner."
+  (with-current-buffer buffer
+    (when (and agent-shell-crew-ack-turns
+               (seq-find (lambda (entry) (and (cdr entry) (>= (cdr entry) agent-shell-crew-ack-turns)))
+                         agent-shell-crew--expected))
+      (let* ((owned (seq-filter (lambda (item) (member (plist-get item :state)
+                                                       agent-shell-crew--open-states))
+                                (agent-shell-crew-queue-list agent-shell-crew--root
+                                                             agent-shell-crew--member)))
+             (owned-ids (mapcar (lambda (item) (plist-get item :id)) owned)))
+        (setq agent-shell-crew--expected
+              (seq-filter (lambda (entry) (member (car entry) owned-ids)) agent-shell-crew--expected))
+        (unless (seq-find (lambda (item)
+                            (and (equal (plist-get item :state) "ACTIVE")
+                                 (not (assoc (plist-get item :id) agent-shell-crew--expected))))
+                          owned)
+          (seq-find (lambda (entry) (and (cdr entry) (>= (cdr entry) agent-shell-crew-ack-turns)))
+                    agent-shell-crew--expected))))))
+
+(defun agent-shell-crew--working-item (root member)
+  "MEMBER's ACTIVE item in ROOT's queue that was touched last, or nil."
+  (car (seq-sort-by (lambda (item)
+                      (float-time (or (agent-shell-crew--item-last-time item) 0)))
+                    #'>
+                    (seq-filter (lambda (item) (equal (plist-get item :state) "ACTIVE"))
+                                (agent-shell-crew-queue-list root member)))))
+
+(defun agent-shell-crew--permission-answered (buffer data)
+  "Log the permission answered in BUFFER, described by event DATA.
+See `agent-shell-crew-log-permissions'."
+  (when agent-shell-crew-log-permissions
+    (with-current-buffer buffer
+      (when-let* ((member agent-shell-crew--member)
+                  (root agent-shell-crew--root)
+                  (item (agent-shell-crew--working-item root member)))
+        (let ((call (map-nested-elt (bound-and-true-p agent-shell--state)
+                                    (list :tool-calls (map-elt data :tool-call-id)))))
+          (agent-shell-crew-queue-record-permission
+           root (plist-get item :id) member
+           (or (map-elt call :title) (map-elt call :kind))
+           (if (map-elt data :cancelled) "cancelled" (map-elt data :option-id))))))))
 
 (defun agent-shell-crew--held (buffer)
   "How many messages BUFFER's member has waiting: the crew's and agent-shell's."
@@ -388,6 +505,9 @@ idle with prompts still queued -- agent-shell pauses its queue after an
 interrupt, and nothing resumes it; or idle after a usage-limit error whose
 reset time has passed -- the turn was cut off and nothing restarts it, as on
 2026-10-01, when the whole crew sat idle for 40 minutes after the reset.
+Two more need no recovery, only the human: a turn ended and its crew MCP
+program was never heard from, so it has no crew tools; or it left an item
+it was told about untouched (see `agent-shell-crew--unacted').
 Never signals."
   (condition-case nil
       (with-current-buffer buffer
@@ -409,7 +529,15 @@ Never signals."
             (format "idle with %d queued message%s that are not being sent; \
 M-x agent-shell-prompt-queue-resume in its buffer"
                     (length (map-elt state :pending-prompts))
-                    (if (= (length (map-elt state :pending-prompts)) 1) "" "s"))))))
+                    (if (= (length (map-elt state :pending-prompts)) 1) "" "s")))
+           ((and (not (shell-maker-busy)) agent-shell-crew--ready (not agent-shell-crew--heard)
+                 (> agent-shell-crew--turns 0))
+            "its crew tools never answered: no crew_* call or tool list from its MCP program \
+since it started; check its MCP servers, then restart it")
+           ((and (not (shell-maker-busy)) (zerop held))
+            (when-let* ((late (agent-shell-crew--unacted buffer)))
+              (format "has not touched item %s in %d turn%s since it was told about it"
+                      (car late) (cdr late) (if (= (cdr late) 1) "" "s")))))))
     (error nil)))
 
 (defvar agent-shell-crew--watch-timer nil
@@ -537,7 +665,11 @@ nudges that arrived meanwhile.  BRIEF overrides ROLE's brief."
     ;; submitting.  The name comes from `--start-new-session' instead.
     (setq agent-shell-crew--member member
           agent-shell-crew--root (agent-shell-crew--normal-root root)
-          agent-shell-crew--ready nil))
+          agent-shell-crew--ready nil
+          ;; A new session starts a new MCP program, to be heard from anew.
+          agent-shell-crew--heard nil
+          agent-shell-crew--turns 0
+          agent-shell-crew--expected nil))
   (let ((sent nil))
     (agent-shell-subscribe-to
      ;; Not `prompt-ready': agent-shell emits that BEFORE it sets the model,
@@ -556,6 +688,16 @@ nudges that arrived meanwhile.  BRIEF overrides ROLE's brief."
      ;; Not inside the event: the refresh kills this buffer, and the
      ;; session may still read busy until the event has run.
      :on-event (lambda (_event) (run-at-time 0 nil #'agent-shell-crew--turn-ended buffer)))
+    (agent-shell-subscribe-to
+     :shell-buffer buffer :event 'input-submitted
+     :on-event (lambda (_event) (agent-shell-crew--input-submitted buffer)))
+    (agent-shell-subscribe-to
+     :shell-buffer buffer :event 'permission-response
+     :on-event (lambda (event)
+                 (condition-case err
+                     (agent-shell-crew--permission-answered buffer (map-elt event :data))
+                   (error (message "agent-shell-crew: permission not logged: %s"
+                                   (error-message-string err))))))
     (dolist (event '(input-submitted turn-complete permission-request permission-response))
       (agent-shell-subscribe-to
        :shell-buffer buffer :event event
@@ -1007,6 +1149,7 @@ tells the owner."
                         picked))))
       (when (string-empty-p decision) (user-error "No decision given; nothing recorded"))
       (let ((owner (agent-shell-crew-queue-decide root id decision)))
+        (agent-shell-crew--expect owner root id)
         (agent-shell-crew--notify
          owner root (agent-shell-crew--decision-text root id decision))
         (message "Decided %s" id)))))
@@ -1057,7 +1200,9 @@ The dot needs `agent-shell-crew-list' loaded; see `agent-shell-crew-health'."
 
 (setq agent-shell-crew-rpc-members-function #'agent-shell-crew-members
       agent-shell-crew-rpc-notify-function #'agent-shell-crew--notify
-      agent-shell-crew-rpc-closed-function #'agent-shell-crew--item-closed)
+      agent-shell-crew-rpc-closed-function #'agent-shell-crew--item-closed
+      agent-shell-crew-rpc-heard-function #'agent-shell-crew--heard
+      agent-shell-crew-rpc-expect-function #'agent-shell-crew--expect)
 
 (provide 'agent-shell-crew)
 ;;; agent-shell-crew.el ends here

@@ -65,6 +65,16 @@
                                            (find-library-name "agent-shell-prompt-queue"))
                                           (buffer-string)))))))
 
+(ert-deftest crew-api-permission-response-data-keys ()
+  "The permission log reads the response's data and the tool call's title."
+  (let ((src (with-temp-buffer
+               (insert-file-contents (find-library-name "agent-shell"))
+               (buffer-string))))
+    (should (string-match-p ":event 'permission-response" src))
+    (should (string-match-p ":event 'input-submitted" src))
+    (dolist (key '(":tool-call-id" ":option-id" ":cancelled" ":tool-calls" "(cons :title"))
+      (should (string-match-p (regexp-quote key) src)))))
+
 (ert-deftest crew-api-buffer-name-format-is-a-function-slot ()
   "Crew names buffers by binding `agent-shell-buffer-name-format' to a function."
   (should (boundp 'agent-shell-buffer-name-format))

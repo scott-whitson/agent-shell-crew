@@ -157,6 +157,18 @@ holds costs no prompt and survives a model that drifts; seven briefs once
 carried their own copies of the protocol, and the copies drifted apart. A
 summary for the human is prose and is never checked.
 
+**A loop goes to the human.** `crew_handoff` refuses to give a member a
+branch it has already held more than `agent-shell-crew-max-returns` (4)
+times since the human last decided on that branch, and tells the sender to
+park the item instead (from CopilotKit's OpenBot, which caps bot hand-off
+chains with `BOT_HANDOFF_MAX_DEPTH`). In pearl's queue and archive 8 of 459
+branches went back to their owner 5 or more times, `crew/215` 11 times.
+Replayed against the live queue on 2026-11-02, a limit of 4 tripped on one
+branch. A decision on any item on the branch starts the count again; log
+times are to the minute, so items from the decision's own minute are not
+counted and the count errs low. Hand-offs to the human, work without a
+branch and the archive are not counted.
+
 **Cancelling owned work.** The creator of an item (its `:FROM:`) and the
 human may cancel it, not only its owner, so a lead can withdraw work it
 slated. A cancel walks `:PARENT:` links and cancels every open item below,
@@ -394,6 +406,30 @@ checkpoint rather than taking a cut-off commit or test run as done.
 It reads two of agent-shell's internal state keys; `make api-check` fails if
 they are renamed.
 
+**Two more kinds of stuck need the human, not recovery** (from a review of
+HKUDS/AutoSwarm, 2026-10-30, whose rule is "native submission does not
+prove that a model has answered"):
+
+- *Its crew tools never answered.* A member whose MCP server failed to load
+  looks exactly like one with nothing to do. The MCP program says `hello`
+  once the agent has listed its tools, and any crew request counts too; a
+  member that ends a turn without either is stuck. Sessions adopted before
+  this existed count as heard.
+- *It left work it was told about untouched.* New work and decisions are
+  expected: the item counts the member's turns from the first prompt
+  submitted after the nudge (a nudge held behind a busy turn has not been
+  seen yet), and any crew request naming the item clears it. Past
+  `agent-shell-crew-ack-turns`, while the member is idle and has no other
+  item `ACTIVE` -- an owner working A over several turns may leave B -- it
+  is stuck. Cancel notices are not expected; closed items are forgotten.
+
+**Each answered permission is logged** on the member's `ACTIVE` item touched
+last, as `permission for <member>: <tool> -> <option>` (from CopilotKit's
+OpenDuet, where every action passes a gateway that writes an audit record).
+The item's log then shows what its owner was allowed to do, which is the
+evidence for pre-allowing a tool per role. On by default, unlike most
+settings, because it is a log line and changes nothing a member does.
+
 ## Human commands
 
 | Command | Does |
@@ -424,6 +460,9 @@ own status display use the function and hook instead. `PARKED` items appear in
 | `agent-shell-crew-python` | `"python3"` |
 | `agent-shell-crew-protocol` | the package's `briefs/protocol.md`, sent after every brief |
 | `agent-shell-crew-handoff-format` | the protocol's line of fields; nil turns the check off |
+| `agent-shell-crew-max-returns` | `4`; times a branch may return to one member before the human decides; nil never checks |
+| `agent-shell-crew-ack-turns` | `2`; turns a member may leave told-about work untouched; nil never checks |
+| `agent-shell-crew-log-permissions` | `t`; log each answered permission on the member's working item |
 
 ## Packaging
 

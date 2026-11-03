@@ -396,4 +396,130 @@
                                     (summary . "ITEM t | HANDED | branch b | sha 1 | tests 3p/0f | next: check | steered: drop X | why: asked"))))
                   t)))))
 
+;;; Heard from, and expected to act
+
+(ert-deftest crew-rpc-every-request-is-heard-with-the-item-it-names ()
+  (crew-rpc-test--with root
+    (let* ((heard nil)
+           (agent-shell-crew-rpc-heard-function (lambda (a r id) (push (list a r id) heard)))
+           (id (alist-get 'id (alist-get 'result (crew-rpc-test--call "human" root "create"
+                                                                    '((title . "T") (brief . "b") (owner . "owner@my-app")))))))
+      (should (eq (alist-get 'ok (crew-rpc-test--call "owner@my-app" root "hello")) t))
+      (crew-rpc-test--call "owner@my-app" root "show" `((id . ,id)))
+      ;; Even a refused request shows the tools work.
+      (crew-rpc-test--call "owner@my-app" root "nonsense")
+      (should (equal (reverse heard)
+                     `(("human" ,root nil) ("owner@my-app" ,root nil) ("owner@my-app" ,root ,id)
+                       ("owner@my-app" ,root nil)))))))
+
+(ert-deftest crew-rpc-new-work-is-expected-before-it-is-sent ()
+  "Expected first, so the nudge's own submission starts its count."
+  (crew-rpc-test--with root
+    (let* ((events nil)
+           (agent-shell-crew-rpc-expect-function (lambda (m _r id) (push (list 'expect m id) events)))
+           (agent-shell-crew-rpc-notify-function (lambda (m _r _tx &optional _u) (push (list 'notify m) events)))
+           (id (alist-get 'id (alist-get 'result (crew-rpc-test--call "human" root "create"
+                                                                    '((title . "T") (brief . "b") (owner . "owner@my-app"))))))
+           (new (progn
+                  (crew-rpc-test--call "owner@my-app" root "claim" `((id . ,id)))
+                  (alist-get 'id (alist-get 'result
+                                            (crew-rpc-test--call "owner@my-app" root "handoff"
+                                                                 `((id . ,id) (to . "check@my-app")
+                                                                   (summary . "ITEM t | HANDED | branch b | sha 1 | tests 1p/0f | next: check"))))))))
+      (should (equal (reverse events)
+                     `((expect "owner@my-app" ,id) (notify "owner@my-app")
+                       (expect "check@my-app" ,new) (notify "check@my-app")))))))
+
+(ert-deftest crew-rpc-a-cancel-notice-is-not-expected-to-be-acted-on ()
+  (crew-rpc-test--with root
+    (let* ((expected nil)
+           (agent-shell-crew-rpc-expect-function (lambda (m _r id) (push (list m id) expected)))
+           (id (alist-get 'id (alist-get 'result (crew-rpc-test--call "human" root "create"
+                                                                    '((title . "T") (brief . "b") (owner . "owner@my-app")))))))
+      (setq expected nil)
+      (crew-rpc-test--call "human" root "done" `((id . ,id) (reason . "no") (canceled . t)))
+      (should (null expected)))))
+
+;;; A loop goes to the human
+
+(defun crew-rpc-test--bounce (root id from to &optional branch)
+  "FROM claims ID in ROOT and hands it to TO; return the reply."
+  (crew-rpc-test--call from root "claim" `((id . ,id)))
+  (crew-rpc-test--call from root "handoff"
+                       `((id . ,id) (to . ,to) ,@(and branch `((branch . ,branch)))
+                         (summary . "ITEM x | HANDED | branch b | sha 1 | tests 1p/1f | next: fix"))))
+
+(defun crew-rpc-test--loop (root returns &optional branch)
+  "Bounce a new item between owner and check until owner has had RETURNS.
+Returns (ITEM-ID-HELD-BY-CHECK . LAST-REPLY)."
+  (let* ((id (alist-get 'id (alist-get 'result
+                                       (crew-rpc-test--call "human" root "create"
+                                                            `((title . "T") (brief . "b") (owner . "owner@my-app")
+                                                              ,@(and branch `((branch . ,branch))))))))
+         reply)
+    (dotimes (_ returns)
+      (setq id (alist-get 'id (alist-get 'result (crew-rpc-test--bounce root id "owner@my-app" "check@my-app"))))
+      (setq reply (crew-rpc-test--bounce root id "check@my-app" "owner@my-app"))
+      (when (eq (alist-get 'ok reply) t) (setq id (alist-get 'id (alist-get 'result reply)))))
+    (cons id reply)))
+
+(ert-deftest crew-rpc-a-branch-may-come-back-to-its-owner-up-to-the-limit ()
+  (crew-rpc-test--with root
+    (let ((agent-shell-crew-max-returns 4))
+      (should (eq (alist-get 'ok (cdr (crew-rpc-test--loop root 4 "crew/1-x"))) t)))))
+
+(ert-deftest crew-rpc-a-loop-past-the-limit-is-refused-and-told-to-park ()
+  "Pearl's crew/215 went back to its owner 11 times."
+  (crew-rpc-test--with root
+    (let* ((agent-shell-crew-max-returns 4)
+           (loop (crew-rpc-test--loop root 5 "crew/1-x"))
+           (reply (cdr loop)))
+      (should (eq (alist-get 'ok reply) :false))
+      (should (string-match-p "already had branch crew/1-x 5 times" (alist-get 'error reply)))
+      (should (string-match-p (format "Park item %s" (regexp-quote (car loop))) (alist-get 'error reply)))
+      ;; Nothing was handed: check still holds it, ACTIVE.
+      (should (equal (plist-get (agent-shell-crew-queue-get root (car loop)) :state) "ACTIVE"))
+      (should (equal (plist-get (agent-shell-crew-queue-get root (car loop)) :owner) "check@my-app")))))
+
+(ert-deftest crew-rpc-a-human-decision-starts-the-count-again ()
+  (crew-rpc-test--with root
+    (let* ((agent-shell-crew-max-returns 4)
+           (id (car (crew-rpc-test--loop root 5 "crew/1-x"))))
+      (should (eq (alist-get 'ok (crew-rpc-test--call "check@my-app" root "park"
+                                                      `((id . ,id) (question . "Loop. (1) go on; (2) stop"))))
+                  t))
+      (agent-shell-crew-queue-decide root id "(1) go on")
+      (should (eq (alist-get 'ok (crew-rpc-test--call
+                                  "check@my-app" root "handoff"
+                                  `((id . ,id) (to . "owner@my-app")
+                                    (summary . "ITEM x | HANDED | branch b | sha 1 | tests 1p/1f | next: fix"))))
+                  t)))))
+
+(ert-deftest crew-rpc-returns-are-not-checked-to-the-human-without-a-branch-or-when-off ()
+  (crew-rpc-test--with root
+    (let ((agent-shell-crew-max-returns 1))
+      (should (eq (alist-get 'ok (cdr (crew-rpc-test--loop root 3))) t))
+      (let ((agent-shell-crew-max-returns nil))
+        (should (eq (alist-get 'ok (cdr (crew-rpc-test--loop root 3 "crew/2-y"))) t)))
+      (let ((id (car (crew-rpc-test--loop root 2 "crew/3-z"))))
+        (should (eq (alist-get 'ok (crew-rpc-test--call
+                                    "check@my-app" root "handoff"
+                                    `((id . ,id) (to . "human") (summary . "Going round in circles."))))
+                    t))))))
+
+(ert-deftest crew-rpc-the-handoffs-own-branch-is-the-one-counted ()
+  (crew-rpc-test--with root
+    (let* ((agent-shell-crew-max-returns 1)
+           (id (car (crew-rpc-test--loop root 2))))
+      ;; No branch on the item, but the hand-off names one owner has held twice.
+      (crew-rpc-test--call "owner@my-app" root "create"
+                           '((title . "Old") (brief . "b") (owner . "owner@my-app") (branch . "crew/9")))
+      (crew-rpc-test--call "check@my-app" root "create"
+                           '((title . "Old2") (brief . "b") (owner . "owner@my-app") (branch . "crew/9")))
+      (let ((reply (crew-rpc-test--call
+                    "check@my-app" root "handoff"
+                    `((id . ,id) (to . "owner@my-app") (branch . "crew/9")
+                      (summary . "ITEM x | HANDED | branch b | sha 1 | tests 1p/1f | next: fix")))))
+        (should (eq (alist-get 'ok reply) :false))))))
+
 ;;; agent-shell-crew-rpc-test.el ends here

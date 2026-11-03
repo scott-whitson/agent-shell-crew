@@ -774,4 +774,140 @@
       (should-not (equal (plist-get (agent-shell-crew-queue-get root a) :brief-version)
                          (plist-get (agent-shell-crew-queue-get root b) :brief-version))))))
 
+;;; Heard from, acted on, and permissions logged
+
+(defun crew-heard-test--start (root)
+  "Start owner@my-app in ROOT's crew, ready, and return its buffer."
+  (let ((b (agent-shell-crew--start-member root "owner" :socket "/s")))
+    (agent-shell-test--emit b 'init-finished)
+    b))
+
+(defun crew-heard-test--create (root title)
+  "Create TITLE for owner@my-app as the MCP program would; return its id."
+  (alist-get 'id (agent-shell-crew--rpc-dispatch
+                  "human" root "create" `((title . ,title) (brief . "b") (owner . "owner@my-app")))))
+
+(ert-deftest crew-a-member-whose-crew-tools-never-answer-is-stuck ()
+  (crew-fresh-test--with root
+    (let ((b (crew-heard-test--start root)))
+      (should-not (agent-shell-crew--member-stuck b))
+      (agent-shell-crew--turn-ended b)
+      (should (string-match-p "crew tools never answered" (agent-shell-crew--member-stuck b)))
+      (agent-shell-crew--heard "owner@my-app" root nil)
+      (should-not (agent-shell-crew--member-stuck b)))))
+
+(ert-deftest crew-a-session-adopted-before-hearing-existed-counts-as-heard ()
+  (with-temp-buffer
+    (setq agent-shell-crew--member "owner@my-app" agent-shell-crew--ready t
+          agent-shell-crew--turns 3)
+    (should-not (agent-shell-crew--member-stuck (current-buffer)))))
+
+(ert-deftest crew-a-member-that-leaves-new-work-untouched-is-stuck ()
+  "Delivered is not acted on: only a crew_* call naming the item is."
+  (crew-fresh-test--with root
+    (let* ((b (crew-heard-test--start root))
+           (id (crew-heard-test--create root "T")))
+      (agent-shell-crew--heard "owner@my-app" root nil)
+      (agent-shell-test--emit b 'input-submitted)
+      (agent-shell-crew--turn-ended b)
+      (should-not (agent-shell-crew--member-stuck b))
+      (agent-shell-crew--turn-ended b)
+      (should (string-match-p (format "has not touched item %s in 2 turns" (regexp-quote id))
+                              (agent-shell-crew--member-stuck b)))
+      (agent-shell-crew--heard "owner@my-app" root id)
+      (should-not (agent-shell-crew--member-stuck b)))))
+
+(ert-deftest crew-a-held-nudge-is-not-counted-until-it-is-submitted ()
+  (crew-fresh-test--with root
+    (let ((b (crew-heard-test--start root)) id)
+      (let ((agent-shell-test--busy t))
+        (setq id (crew-heard-test--create root "T"))
+        (agent-shell-crew--turn-ended b)
+        (agent-shell-crew--turn-ended b))
+      (should (equal (buffer-local-value 'agent-shell-crew--expected b) (list (cons id nil))))
+      (agent-shell-test--emit b 'input-submitted)
+      (agent-shell-crew--turn-ended b)
+      (should (equal (buffer-local-value 'agent-shell-crew--expected b) (list (cons id 1)))))))
+
+(ert-deftest crew-untouched-work-is-not-stuck-while-another-item-is-active ()
+  "An owner working A through several turns may leave B for later."
+  (crew-fresh-test--with root
+    (let* ((b (crew-heard-test--start root))
+           (a (agent-shell-crew-queue-create root "human" :title "A" :owner "owner@my-app")))
+      (agent-shell-crew-queue-claim root "owner@my-app" a)
+      (crew-heard-test--create root "B")
+      (agent-shell-crew--heard "owner@my-app" root nil)
+      (agent-shell-test--emit b 'input-submitted)
+      (agent-shell-crew--turn-ended b)
+      (agent-shell-crew--turn-ended b)
+      (should-not (agent-shell-crew--member-stuck b))
+      (agent-shell-crew-queue-done root "owner@my-app" a "done")
+      (should (string-match-p "has not touched" (agent-shell-crew--member-stuck b))))))
+
+(ert-deftest crew-an-expected-item-that-closed-is-forgotten ()
+  (crew-fresh-test--with root
+    (let* ((b (crew-heard-test--start root))
+           (id (crew-heard-test--create root "T")))
+      (agent-shell-crew--heard "owner@my-app" root nil)
+      (agent-shell-test--emit b 'input-submitted)
+      (agent-shell-crew--turn-ended b)
+      (agent-shell-crew--turn-ended b)
+      (agent-shell-crew-queue-done root "human" id "not needed" t)
+      (should-not (agent-shell-crew--member-stuck b))
+      (should (null (buffer-local-value 'agent-shell-crew--expected b))))))
+
+(ert-deftest crew-ack-turns-nil-never-checks ()
+  (crew-fresh-test--with root
+    (let* ((agent-shell-crew-ack-turns nil)
+           (b (crew-heard-test--start root)))
+      (crew-heard-test--create root "T")
+      (agent-shell-crew--heard "owner@my-app" root nil)
+      (agent-shell-test--emit b 'input-submitted)
+      (dotimes (_ 5) (agent-shell-crew--turn-ended b))
+      (should-not (agent-shell-crew--member-stuck b)))))
+
+(ert-deftest crew-a-decision-is-expected-to-be-acted-on ()
+  (crew-fresh-test--with root
+    (let* ((b (crew-heard-test--start root))
+           (id (agent-shell-crew-queue-create root "human" :title "T" :owner "owner@my-app")))
+      (agent-shell-crew-queue-claim root "owner@my-app" id)
+      (agent-shell-crew-queue-park root "owner@my-app" id "Which? (1) a; (2) b")
+      (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "(1) a")))
+        (agent-shell-crew-decide-item root id))
+      (should (assoc id (buffer-local-value 'agent-shell-crew--expected b))))))
+
+(defun crew-heard-test--permission (b call-id option &optional cancelled)
+  "Answer a permission for CALL-ID in B with OPTION."
+  (agent-shell-test--emit b 'permission-response
+                          `((:tool-call-id . ,call-id) (:option-id . ,option) (:cancelled . ,cancelled))))
+
+(ert-deftest crew-an-answered-permission-is-logged-on-the-working-item ()
+  (crew-fresh-test--with root
+    (let* ((b (crew-heard-test--start root))
+           (id (agent-shell-crew-queue-create root "human" :title "T" :owner "owner@my-app")))
+      (agent-shell-crew-queue-claim root "owner@my-app" id)
+      (with-current-buffer b
+        (setq agent-shell--state
+              (list (cons :tool-calls (list (cons "tc1" (list (cons :title "git push")))
+                                            (cons "tc2" (list (cons :kind "execute"))))))))
+      (crew-heard-test--permission b "tc1" "allow")
+      (crew-heard-test--permission b "tc2" nil t)
+      (let ((log (plist-get (agent-shell-crew-queue-get root id) :log)))
+        (should (seq-find (lambda (l) (string-match-p "permission for owner@my-app: git push -> allow" l)) log))
+        (should (seq-find (lambda (l) (string-match-p "permission for owner@my-app: execute -> cancelled" l)) log))))))
+
+(ert-deftest crew-a-permission-with-no-active-item-or-turned-off-is-not-logged ()
+  (crew-fresh-test--with root
+    (let* ((b (crew-heard-test--start root))
+           (id (agent-shell-crew-queue-create root "human" :title "T" :owner "owner@my-app"))
+           (before (length (plist-get (agent-shell-crew-queue-get root id) :log))))
+      ;; Still PENDING: nothing is being worked on.
+      (crew-heard-test--permission b "tc1" "allow")
+      (agent-shell-crew-queue-claim root "owner@my-app" id)
+      (let ((agent-shell-crew-log-permissions nil))
+        (crew-heard-test--permission b "tc1" "allow"))
+      (should-not (seq-find (lambda (l) (string-match-p "permission" l))
+                            (plist-get (agent-shell-crew-queue-get root id) :log)))
+      (should (= (1+ before) (length (plist-get (agent-shell-crew-queue-get root id) :log)))))))
+
 ;;; agent-shell-crew-test.el ends here

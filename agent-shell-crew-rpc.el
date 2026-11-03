@@ -46,6 +46,22 @@ Nil accepts any name.")
 Nil does nothing.  The session side records what the item cost and gives
 the member a fresh context; see `agent-shell-crew--item-closed'.")
 
+(defvar agent-shell-crew-rpc-heard-function nil
+  "Function called with ACTOR, ROOT and ID on every request from ACTOR.
+ID is the item the request names, or nil.  Hearing at all shows ACTOR's
+crew tools work; naming an item shows ACTOR acted on it.  Nil does
+nothing.  See `agent-shell-crew--heard'.")
+
+(defvar agent-shell-crew-rpc-expect-function nil
+  "Function called with MEMBER, ROOT and ID before MEMBER is told about ID.
+Called first, so the nudge's own submission is seen as its start.  Nil
+does nothing.  See `agent-shell-crew--expect'.")
+
+(defun agent-shell-crew--rpc-call (function &rest args)
+  "Call FUNCTION with ARGS when it is non-nil.  Never signals."
+  (when function
+    (condition-case nil (apply function args) (error nil))))
+
 (defun agent-shell-crew--rpc-closed (actor root id)
   "Run `agent-shell-crew-rpc-closed-function' for ACTOR, ROOT and ID.
 Never signals."
@@ -79,6 +95,64 @@ ITEM <id> | <DONE|HANDED|PARKED> | branch <b> | sha <s> | tests <n>p/<n>f | next
 \(add \"| why: ...\" if needed; put detail in `brief').  Yours began: %S.  Nothing was handed \
 off; send it again in that shape"
      (truncate-string-to-width (car (split-string summary "\n")) 60 nil nil "..."))))
+
+(defvar agent-shell-crew-max-returns 4
+  "Times one branch may come back to the same member before the human decides.
+A hand-off that would give a member a branch it has already held more
+than this many times since the human last decided on it is refused, and
+the member is told to park instead.  Nil never checks.  OpenBot caps bot
+hand-off chains the same way; in pearl's queue 8 of 459 branches went
+back to their owner 5 or more times, one 11 times (2026-11-02).  Only
+the queue counts, not the archive, and only work with a branch.")
+
+(defun agent-shell-crew--line-time (line)
+  "The time stamped at the start of log LINE, or nil."
+  (when (string-match "\\`\\[\\([^]]+\\)\\]" line)
+    (ignore-errors (org-time-string-to-time (match-string 1 line)))))
+
+(defun agent-shell-crew--returns (root to branch)
+  "How often TO has held BRANCH in ROOT's queue since the human decided on it.
+Each item TO owned on BRANCH counts once, by when it was created; a
+decision on any item on BRANCH starts the count again from the next
+minute."
+  (let* ((items (seq-filter (lambda (item) (equal (plist-get item :branch) branch))
+                            (agent-shell-crew-queue-list root)))
+         (decided (car (sort (delq nil (mapcan
+                                        (lambda (item)
+                                          (mapcar (lambda (line)
+                                                    (and (string-match-p "\\] decided by human: " line)
+                                                         (agent-shell-crew--line-time line)))
+                                                  (plist-get item :log)))
+                                        items))
+                             (lambda (a b) (time-less-p b a))))))
+    (seq-count (lambda (item)
+                 (and (equal (plist-get item :owner) to)
+                      (let ((created (agent-shell-crew--line-time
+                                      (or (car (plist-get item :log)) ""))))
+                        (or (null decided)
+                            ;; Log times are to the minute: an item from the
+                            ;; decision's own minute is not counted, so the
+                            ;; count errs low and never refuses wrongly.
+                            (and created (time-less-p decided created))))))
+               items)))
+
+(defun agent-shell-crew--rpc-check-returns (root id to branch)
+  "Fail when handing ID in ROOT to TO would pass `agent-shell-crew-max-returns'.
+BRANCH is the hand-off's branch, or nil for the item's own.  A hand-off
+to the human is never checked: that is where a loop should go."
+  (when (and agent-shell-crew-max-returns (not (equal to "human")))
+    (let ((branch (if (agent-shell-crew--blank-p branch)
+                      (plist-get (agent-shell-crew-queue-get root id) :branch)
+                    branch)))
+      (unless (agent-shell-crew--blank-p branch)
+        (let ((held (agent-shell-crew--returns root to branch)))
+          (when (> held agent-shell-crew-max-returns)
+            (agent-shell-crew--fail
+             "Hand-off refused: %s has already had branch %s %d times since the human last \
+decided on it (limit %d), so this work is going round in a loop.  Nothing was handed off.  \
+Park item %s on the human with crew_park instead: say what keeps failing, and end the \
+question with its options"
+             to branch held agent-shell-crew-max-returns id)))))))
 
 (defun agent-shell-crew--nudge-body (id body)
   "Return BODY for item ID, cut at `agent-shell-crew-nudge-max-chars'.
@@ -169,10 +243,14 @@ on 2026-09-28."
 Hand off or add to that one, or pass allow_duplicate_ref if this really is separate work"
        (plist-get open :id) (plist-get open :state) (plist-get open :owner) ref))))
 
-(defun agent-shell-crew--rpc-notify (member root text &optional urgent)
+(defun agent-shell-crew--rpc-notify (member root text &optional urgent id)
   "Tell MEMBER of ROOT's crew TEXT, unless MEMBER is the human.
-URGENT non-nil asks for the text to be steered into a running turn."
+URGENT non-nil asks for the text to be steered into a running turn.  ID,
+when non-nil, is the item MEMBER is expected to act on; see
+`agent-shell-crew-rpc-expect-function'."
   (when (and agent-shell-crew-rpc-notify-function (not (equal member "human")))
+    (when id
+      (agent-shell-crew--rpc-call agent-shell-crew-rpc-expect-function member root id))
     (condition-case nil
         (if urgent
             (funcall agent-shell-crew-rpc-notify-function member root text t)
@@ -183,7 +261,10 @@ URGENT non-nil asks for the text to be steered into a running turn."
   "Run VERB with ARGS in ROOT's queue on behalf of ACTOR."
   (let ((arg (lambda (key &optional required) (agent-shell-crew--rpc-arg args key required))))
     (pcase verb
-      ("mine" (agent-shell-crew--open-summaries (agent-shell-crew-queue-list root actor)))
+      ;; Sent by the MCP program once its tools are listed, before the
+      ;; member has called any of them.
+      ("hello" '((done . t)))
+      ("mine"(agent-shell-crew--open-summaries (agent-shell-crew-queue-list root actor)))
       ("list" (agent-shell-crew--open-summaries (agent-shell-crew-queue-list root)))
       ("show" (agent-shell-crew--item-json (agent-shell-crew-queue-get root (funcall arg 'id t))))
       ("create"
@@ -203,7 +284,7 @@ URGENT non-nil asks for the text to be steered into a running turn."
                                                     :branch (funcall arg 'branch)
                                                     :request request)))
              (agent-shell-crew--rpc-notify owner root (agent-shell-crew--nudge-text root id)
-                                           (eq (funcall arg 'urgent) t))
+                                           (eq (funcall arg 'urgent) t) id)
              `((id . ,id))))))
       ("claim" (agent-shell-crew-queue-claim root actor (funcall arg 'id t)) '((done . t)))
       ("note" (agent-shell-crew-queue-note root actor (funcall arg 'id t) (funcall arg 'text t))
@@ -214,11 +295,12 @@ URGENT non-nil asks for the text to be steered into a running turn."
              `((id . ,old) (duplicate . t))
            (agent-shell-crew--rpc-check-member root to)
            (agent-shell-crew--rpc-check-summary to (funcall arg 'summary t))
+           (agent-shell-crew--rpc-check-returns root (funcall arg 'id t) to (funcall arg 'branch))
            (let* ((new (agent-shell-crew-queue-handoff root actor (funcall arg 'id t) to
                                                        (funcall arg 'summary t) (funcall arg 'brief)
                                                        (funcall arg 'status) (funcall arg 'branch)
                                                        request)))
-             (agent-shell-crew--rpc-notify to root (agent-shell-crew--nudge-text root new))
+             (agent-shell-crew--rpc-notify to root (agent-shell-crew--nudge-text root new) nil new)
              (agent-shell-crew--rpc-closed actor root (funcall arg 'id t))
              `((id . ,new))))))
       ("checkpoint" (agent-shell-crew-queue-checkpoint root actor (funcall arg 'id t)
@@ -268,6 +350,9 @@ Returns base64-encoded JSON, {\"ok\": true, \"result\": ...} or
          (unless (and (stringp root) (file-directory-p root))
            (agent-shell-crew--fail "Request has no valid project"))
          (unless (stringp verb) (agent-shell-crew--fail "Request has no verb"))
+         (agent-shell-crew--rpc-call agent-shell-crew-rpc-heard-function actor root
+                                     (let ((id (alist-get 'id args)))
+                                       (and (stringp id) (not (string-empty-p id)) id)))
          `((ok . t) (result . ,(agent-shell-crew--rpc-dispatch actor root verb args))))
      (agent-shell-crew-error `((ok . :json-false) (error . ,(cadr err))))
      (error `((ok . :json-false)

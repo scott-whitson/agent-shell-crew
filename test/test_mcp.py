@@ -65,6 +65,20 @@ class McpTest(unittest.TestCase):
                                  "crew_note", "crew_handoff", "crew_stage", "crew_park", "crew_done",
                                  "crew_checkpoint"})
 
+    def test_listing_tools_says_hello_once(self):
+        """A member that never calls a crew tool still shows its tools are up."""
+        self.run_session([{"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+                          {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}])
+        calls = self.calls()
+        self.assertEqual(len(calls), 1)
+        request = self.request(calls[0])
+        self.assertEqual(request["verb"], "hello")
+        self.assertEqual(request["actor"], "owner@my-app")
+
+    def test_no_hello_without_a_tool_list(self):
+        self.run_session([{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}])
+        self.assertEqual(self.calls(), [])
+
     def test_call_forwards_with_identity_from_environment(self):
         out = self.run_session([{"jsonrpc": "2.0", "id": 3, "method": "tools/call",
                                  "params": {"name": "crew_claim",
