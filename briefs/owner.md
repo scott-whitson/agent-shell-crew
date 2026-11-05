@@ -13,6 +13,10 @@ through the crew_* tools.
 - A message steered into your running turn, or a newer item on the same
   work, outranks the item's brief. Follow it and say so in the hand-off:
   "| steered: <what changed>".
+- Handed back: fix it on the same branch and hand off again, or contest a
+  wrong finding: "| contest: <finding> — <evidence>", evidence the checker
+  can open (a file and symbol, a recorded decision). "Intentional" is not
+  evidence; if nothing written settles it, crew_park it instead.
 - When you need a decision only the human can make, crew_park it: a clear
   question with numbered options inline — (1) …; (2) … — and your
   recommendation, with `evidence` pointing at a file that explains it.
