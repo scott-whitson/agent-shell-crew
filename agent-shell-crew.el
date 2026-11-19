@@ -849,11 +849,16 @@ Interactively, read ROOT and a comma-separated list of ROLES."
 ;;;###autoload
 (defun agent-shell-crew-archive (root)
   "Move the crew at ROOT's long-closed items into its archive file.
-See `agent-shell-crew-queue-archive'.  The board still shows them."
+Then rotate the archive's oldest items into monthly files.  See
+`agent-shell-crew-queue-archive' and `agent-shell-crew-archive-rotate'.
+The board still shows what the archive keeps.  Returns how many items
+were archived."
   (interactive (list (agent-shell-crew--read-root "Archive crew: ")))
-  (let ((n (agent-shell-crew-queue-archive root)))
+  (let ((n (agent-shell-crew-queue-archive root))
+        (rotated (agent-shell-crew-archive-rotate root)))
     (when (called-interactively-p 'interactive)
-      (message "Archived %d item%s" n (if (= n 1) "" "s")))
+      (message "Archived %d item%s, rotated %d out of the archive"
+               n (if (= n 1) "" "s") rotated))
     n))
 
 (defvar agent-shell-crew--last-archive nil
@@ -867,7 +872,10 @@ See `agent-shell-crew-queue-archive'.  The board still shows them."
     (setq agent-shell-crew--last-archive (current-time))
     (dolist (root (agent-shell-crew--running-roots))
       (condition-case err (agent-shell-crew-queue-archive root)
-        (error (message "agent-shell-crew: archiving %s failed: %s" root (error-message-string err)))))))
+        (error (message "agent-shell-crew: archiving %s failed: %s" root (error-message-string err))))
+      (condition-case err (agent-shell-crew-archive-rotate root)
+        (error (message "agent-shell-crew: rotating %s's archive failed: %s"
+                        root (error-message-string err)))))))
 
 ;;; Stopping a crew
 

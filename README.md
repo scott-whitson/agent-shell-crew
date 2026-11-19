@@ -127,6 +127,13 @@ so a hand-off chain in progress keeps its history. The board reads both files,
 so archived work is still on it. The archive is written before the queue is
 cut: an interruption leaves an item in both, never in neither.
 
+The archive is rotated on the same schedule: items in it whose last log line is
+more than `agent-shell-crew-archive-keep-days` (14) old -- a week in the queue,
+then a week in the archive -- move to
+`archive/<queue>-YYYY-MM.org`, one file per month. That subdirectory is cold
+storage: neither the board nor an agenda that lists the queue directory reads
+it, so their cost stays bounded instead of growing with the crew's history.
+
 ## Settings
 
 | Setting | Default |
@@ -144,6 +151,7 @@ cut: an interruption leaves an item in both, never in neither.
 | `agent-shell-crew-stages` | none; or `:stages` in a profile |
 | `agent-shell-crew-check-minutes` | `5` |
 | `agent-shell-crew-archive-days` | `7`; `nil` never archives |
+| `agent-shell-crew-archive-keep-days` | `14`, counted from close like `archive-days`; `nil` never rotates |
 | `agent-shell-crew-nudge-max-chars` | `4000`: how much of a brief a nudge carries |
 
 To show parked items in your agenda:

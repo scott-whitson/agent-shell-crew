@@ -380,6 +380,55 @@
     (let ((agent-shell-crew-archive-days nil))
       (should (= (agent-shell-crew-queue-archive root) 0)))))
 
+;;; Archive rotation
+
+(defun crew-test--ids (items)
+  "The ids of ITEMS."
+  (mapcar (lambda (i) (plist-get i :id)) items))
+
+(ert-deftest crew-archive-rotate-moves-old-items-to-monthly-files ()
+  "Archived items past the keep window leave the archive for a file per month."
+  (crew-test--with-project root
+    (let ((ancient (crew-test--closed root "Ancient" nil 70))
+          (old (crew-test--closed root "Old" nil 40))
+          (recent (crew-test--closed root "Recent" nil 10)))
+      (should (= (agent-shell-crew-queue-archive root 7) 3))
+      (should (= (agent-shell-crew-archive-rotate root 14) 2))
+      (should (equal (crew-test--ids (agent-shell-crew-archive-list root)) (list recent)))
+      (dolist (pair `((,ancient . 70) (,old . 40)))
+        (let ((cold (agent-shell-crew-cold-archive-file
+                     root (time-subtract nil (* (cdr pair) 86400)))))
+          (should (string-match-p "/archive/my-app-[0-9a-f]\\{6\\}-[0-9]\\{4\\}-[0-9]\\{2\\}\\.org\\'" cold))
+          (should (member (car pair) (crew-test--ids (agent-shell-crew--file-items cold))))
+          (with-temp-buffer
+            (insert-file-contents cold)
+            (should (string-match-p "^#\\+TODO: PENDING" (buffer-string))))))
+      (should (= (agent-shell-crew-archive-rotate root 14) 0)))))
+
+(ert-deftest crew-archive-rotate-keeps-everything-when-nil ()
+  (crew-test--with-project root
+    (crew-test--closed root "Old" nil 400)
+    (agent-shell-crew-queue-archive root 7)
+    (let ((agent-shell-crew-archive-keep-days nil))
+      (should (= (agent-shell-crew-archive-rotate root) 0)))
+    (should (= (length (agent-shell-crew-archive-list root)) 1))))
+
+(ert-deftest crew-archive-rotate-without-an-archive-is-a-no-op ()
+  (crew-test--with-project root
+    (should (= (agent-shell-crew-archive-rotate root 7) 0))
+    (should-not (file-exists-p (agent-shell-crew-archive-file root)))))
+
+(ert-deftest crew-archive-rotate-files-are-not-queue-files ()
+  "Monthly files sit in a subdirectory: no directory scan or agenda sees them."
+  (crew-test--with-project root
+    (crew-test--closed root "Old" nil 40)
+    (agent-shell-crew-queue-archive root 7)
+    (agent-shell-crew-archive-rotate root 7)
+    (let ((cold (agent-shell-crew-cold-archive-file root (time-subtract nil (* 40 86400)))))
+      (should (file-exists-p cold))
+      (should-not (equal (file-name-directory cold) agent-shell-crew-directory))
+      (should-not (agent-shell-crew--queue-file-root cold)))))
+
 ;;; Org's element cache
 
 (ert-deftest crew-queue-buffers-run-without-the-element-cache ()

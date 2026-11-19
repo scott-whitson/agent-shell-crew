@@ -633,6 +633,36 @@ shares its ref."
                            (plist-get i :id))))
                   items))))
 
+(defun agent-shell-crew--archive-buffer (file)
+  "Visit archive FILE for a crew write and return its buffer.
+Refuses when it has unsaved edits, as a queue buffer does."
+  (make-directory (file-name-directory file) t)
+  (with-current-buffer (let ((find-file-hook nil)) (find-file-noselect file t))
+    (agent-shell-crew--sync-with-disk)
+    (when (buffer-modified-p)
+      (agent-shell-crew--fail "%s has unsaved edits; save or revert it first" file))
+    (unless (derived-mode-p 'org-mode) (org-mode))
+    (agent-shell-crew--quiet-org)
+    (current-buffer)))
+
+(defun agent-shell-crew--append-items (file title root texts)
+  "Append item TEXTS to archive FILE and save it.
+A new file gets a header with TITLE and ROOT."
+  (with-current-buffer (agent-shell-crew--archive-buffer file)
+    (save-excursion
+      (save-restriction
+        (widen)
+        (when (= (buffer-size) 0)
+          (insert (format "#+TITLE: %s\n#+CREW_ROOT: %s\n%s\n\n"
+                          title (file-name-as-directory (expand-file-name root))
+                          agent-shell-crew--todo-line)))
+        (goto-char (point-max))
+        (unless (bolp) (insert "\n"))
+        (dolist (text texts)
+          (insert text)
+          (unless (bolp) (insert "\n")))))
+    (let ((save-silently t)) (save-buffer))))
+
 (defun agent-shell-crew-queue-archive (root &optional days)
   "Move ROOT's items closed more than DAYS ago into its archive file.
 DAYS defaults to `agent-shell-crew-archive-days'.  An item whose ref still
@@ -651,32 +681,91 @@ leaves an item in both files, never in neither.  Returns how many moved."
                                    (point) (save-excursion (org-end-of-subtree t t) (point))))
                                 ids)))))
         (when ids
-          (let ((file (agent-shell-crew-archive-file root)))
-            (with-current-buffer (let ((find-file-hook nil)) (find-file-noselect file t))
-              (agent-shell-crew--sync-with-disk)
-              (when (buffer-modified-p)
-                (agent-shell-crew--fail "%s has unsaved edits; save or revert it first" file))
-              (unless (derived-mode-p 'org-mode) (org-mode))
-              (agent-shell-crew--quiet-org)
-              (save-restriction
-                (widen)
-                (when (= (buffer-size) 0)
-                  (insert (format "#+TITLE: crew archive: %s\n#+CREW_ROOT: %s\n%s\n\n"
-                                  (agent-shell-crew-project-name root)
-                                  (file-name-as-directory (expand-file-name root))
-                                  agent-shell-crew--todo-line)))
-                (goto-char (point-max))
-                (unless (bolp) (insert "\n"))
-                (dolist (text texts)
-                  (insert text)
-                  (unless (bolp) (insert "\n"))))
-              (let ((save-silently t)) (save-buffer))))
+          (agent-shell-crew--append-items
+           (agent-shell-crew-archive-file root)
+           (format "crew archive: %s" (agent-shell-crew-project-name root))
+           root texts)
           (agent-shell-crew--with-queue root
             (dolist (id ids)
               (agent-shell-crew--goto id)
               (delete-region (point) (save-excursion (org-end-of-subtree t t) (point)))))
           (agent-shell-crew--changed root nil 'archive))
         (length ids)))))
+
+;;; Archive rotation
+
+(defcustom agent-shell-crew-archive-keep-days 14
+  "Days after closing that an item leaves the archive file.
+Counted from its last log line, as `agent-shell-crew-archive-days' is, so
+it includes the days the item spent in the queue: the defaults give a
+week in the queue, then a week in the archive.  At or below
+`agent-shell-crew-archive-days' the archive keeps almost nothing.
+Older items move to a file per month under archive/ beside the queue,
+which nothing here reads: the board shows the queue and the archive
+only.  Without this the archive only grows, and the board, the agenda
+and any indexer of the directory re-read all of it.  nil never rotates."
+  :type '(choice (const :tag "Never" nil) number)
+  :group 'agent-shell-crew)
+
+(defun agent-shell-crew-cold-archive-file (root time)
+  "Return ROOT's monthly archive file for the month of TIME.
+It sits in an archive/ subdirectory so no scan of the queue directory,
+and no agenda listing it, ever reads it."
+  (let ((queue (agent-shell-crew-queue-file root)))
+    (expand-file-name (format "%s-%s.org" (file-name-base queue) (format-time-string "%Y-%m" time))
+                      (expand-file-name "archive" (file-name-directory queue)))))
+
+(defun agent-shell-crew-archive-rotate (root &optional days)
+  "Move ROOT's archived items older than DAYS into monthly files.
+DAYS defaults to `agent-shell-crew-archive-keep-days'.  Each item goes to
+the file for the month of its last log line; an item with no dated log
+line stays.  The monthly files are written before the archive is cut: an
+interruption leaves an item in both, never in neither.  Returns how many
+moved."
+  (let ((days (or days agent-shell-crew-archive-keep-days))
+        (file (agent-shell-crew-archive-file root)))
+    (if (not (and days (file-readable-p file)))
+        0
+      (let* ((cutoff (time-subtract nil (* days 86400)))
+             (buffer (agent-shell-crew--archive-buffer file))
+             (old (with-current-buffer buffer
+                    (save-excursion
+                      (save-restriction
+                        (widen)
+                        (let (acc)
+                          (org-map-entries
+                           (lambda ()
+                             (when (org-entry-get nil "CREW_ID")
+                               (let ((start (point))
+                                     (time (agent-shell-crew--item-last-time
+                                            (save-excursion (agent-shell-crew--read-item)))))
+                                 (when (and time (time-less-p time cutoff))
+                                   (let ((end (save-excursion (org-end-of-subtree t t) (point))))
+                                     (push (list time start end (buffer-substring-no-properties start end))
+                                           acc))))))
+                           "LEVEL=1")
+                          (nreverse acc))))))
+             (months nil))
+        (when old
+          (dolist (entry old)
+            (let ((cold (agent-shell-crew-cold-archive-file root (nth 0 entry))))
+              (unless (assoc cold months) (push (list cold) months))
+              (push (nth 3 entry) (cdr (assoc cold months)))))
+          (dolist (month (nreverse months))
+            (agent-shell-crew--append-items
+             (car month)
+             (format "crew archive: %s, %s" (agent-shell-crew-project-name root)
+                     (substring (file-name-base (car month)) -7))
+             root (reverse (cdr month))))
+          (with-current-buffer buffer
+            (save-excursion
+              (save-restriction
+                (widen)
+                (dolist (entry (reverse old))
+                  (delete-region (nth 1 entry) (nth 2 entry)))))
+            (let ((save-silently t)) (save-buffer)))
+          (agent-shell-crew--changed root nil 'rotate))
+        (length old)))))
 
 (provide 'agent-shell-crew-queue)
 ;;; agent-shell-crew-queue.el ends here
